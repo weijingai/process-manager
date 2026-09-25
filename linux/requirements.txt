@@ -1,0 +1,8 @@
+# Linux进程管理工具（潍鲸 - weijing.co） - 运行依赖
+# 安装：pip3 install -r requirements.txt
+
+# 进程 / 端口 / CPU / 内存采集核心库（Linux 下直读 /proc，无需额外驱动）
+psutil>=5.9.0
+
+# 打包成独立可执行文件时才需要（不需要打包可忽略）：
+# pyinstaller>=6.0

@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+dist/
+dist-linux/
+__pycache__/
+*.pyc
+*.pyo
+
+# WorkBuddy internal project data
+.workbuddy/
+
+# Runtime logs
+_server.log
+*.log
+
+# Temp / dev helper scripts
+_*.py
+linux/_verify_linux.py
+linux/_smoke_linux.py
