@@ -17,3 +17,8 @@ _server.log
 _*.py
 linux/_verify_linux.py
 linux/_smoke_linux.py
+
+# Secrets (never commit)
+.gh_token
+token.txt
+*.token
