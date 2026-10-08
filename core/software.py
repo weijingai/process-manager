@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""文件搜索 与 软件清理（缓存清理 + 已安装软件卸载）。
+"""文件查找 与 软件清理（缓存清理 + 已安装软件卸载）。
 
 分成两块能力：
 
-1. **文件搜索**：按名称关键字在全盘（或指定盘符 / 指定根目录）查找文件与文件夹，
+1. **文件查找**：按名称关键字在全盘（或指定盘符 / 指定根目录）查找文件与文件夹，
    支持只看文件 / 只看文件夹、按大小与时间排序、测算占用、打开文件位置、删除到回收站。
    全程只读遍历，限时 + 限量 + 跳过系统目录，避免拖慢系统。
 
@@ -102,18 +102,20 @@ def _search_roots(drive: str = "", root: str = "") -> list[tuple[str, int]]:
     """返回遍历起点 [(绝对路径, 深度上限)]。
 
     · root 参数优先（用户指定了起始目录）
-    · drive 指定单个分区
-    · 都为空则遍历所有可用分区的根
+    · drive 指定单个分区（也可传空字符串 / "ALL" 表示全盘）
+    · 都为空则遍历所有可用分区的根，全盘时自动放宽深度，查找更彻底
     """
+    # 全盘：空字符串或显式 "ALL" 都视为全盘扫描
+    if drive and drive.strip().upper() not in ("", "ALL"):
+        mp = drive.rstrip("\\/") or drive
+        return [(mp, _MAX_DEPTH_DEFAULT)] if os.path.isdir(mp) else []
     if root:
         ap = os.path.abspath(root)
         return [(ap, _MAX_DEPTH_DEFAULT)] if os.path.isdir(ap) else []
+    depth = 9 if _MAX_DEPTH_DEFAULT < 9 else _MAX_DEPTH_DEFAULT  # 全盘时放宽到 9 层
     roots: list[tuple[str, int]] = []
-    if drive:
-        mp = drive.rstrip("\\/") or drive
-        return [(mp, _MAX_DEPTH_DEFAULT)] if os.path.isdir(mp) else []
     for d in list_search_drives():
-        roots.append((d["value"], _MAX_DEPTH_DEFAULT))
+        roots.append((d["value"], depth))
     return roots
 
 

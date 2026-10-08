@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Linux 版：文件搜索 与 软件清理（缓存清理 + 已安装软件卸载）。
+"""Linux 版：文件查找 与 软件清理（缓存清理 + 已安装软件卸载）。
 
 接口与 Windows 版 core/software.py 完全同名，便于 Web 前端三端共用：
     list_search_drives / search_files / measure_paths / reveal_path
@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover
 
 
 # --------------------------------------------------------------------------- #
-# 文件搜索
+# 文件查找
 # --------------------------------------------------------------------------- #
 
 _SEARCH_SKIP = {
@@ -100,13 +100,15 @@ def list_search_drives() -> list[dict[str, Any]]:
 
 
 def _search_roots(drive: str = "", root: str = "") -> list[tuple[str, int]]:
+    # 全盘：空字符串或显式 "ALL" 都视为全盘扫描；全盘时放宽到 9 层
+    if drive and drive.strip().upper() not in ("", "ALL"):
+        mp = drive.rstrip("/") or "/"
+        return [(mp, _MAX_DEPTH_DEFAULT)] if os.path.isdir(mp) else []
     if root:
         ap = os.path.abspath(os.path.expanduser(root))
         return [(ap, _MAX_DEPTH_DEFAULT)] if os.path.isdir(ap) else []
-    if drive:
-        mp = drive.rstrip("/") or "/"
-        return [(mp, _MAX_DEPTH_DEFAULT)] if os.path.isdir(mp) else []
-    return [(d["value"], _MAX_DEPTH_DEFAULT) for d in list_search_drives()]
+    depth = 9 if _MAX_DEPTH_DEFAULT < 9 else _MAX_DEPTH_DEFAULT
+    return [(d["value"], depth) for d in list_search_drives()]
 
 
 def _entry_row(full: str, is_dir: bool, parent: str, size: int,

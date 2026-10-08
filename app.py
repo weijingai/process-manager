@@ -337,7 +337,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": f"读取软件缓存文件失败：{exc}"}, 500)
             return
 
-        # ---- 文件搜索（顶层菜单：查找文件与文件夹） ----
+        # ---- 文件查找（顶层菜单：查找文件与文件夹） ----
 
         if path == "/api/search/drives":
             try:
@@ -374,7 +374,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     with_dir_size=with_size)
                 self._send_json({"ok": True, "data": data})
             except Exception as exc:
-                self._send_json({"ok": False, "error": f"文件搜索失败：{exc}"}, 500)
+                self._send_json({"ok": False, "error": f"文件查找失败：{exc}"}, 500)
             return
 
         if path.startswith("/api/"):

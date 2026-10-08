@@ -69,7 +69,7 @@
     <button class="tab" data-tab="ports">端口占用</button>
     <button class="tab" data-tab="monitor">系统监控</button>
     <button class="tab" data-tab="cleanup">磁盘清理</button>
-    <button class="tab" data-tab="search"><span class="tab-ico">🔍</span>文件搜索</button>
+    <button class="tab" data-tab="search"><span class="tab-ico">🔍</span>文件查找</button>
   </nav>
 
   <section class="toolbar" id="toolbar">
@@ -81,7 +81,7 @@
     <select id="statusFilter" class="select-sm"></select>
     <span id="countInfo" class="count-info">-</span>
     <div class="col-menu-wrap">
-      <button id="btnColSettings" class="btn btn-ghost btn-sm">显示列</button>
+      <button id="btnColSettings" class="btn btn-act btn-sm">显示列</button>
     </div>
   </section>
 
@@ -237,14 +237,16 @@
             <div class="card-head">
               <h3>磁盘空间清理</h3>
               <div class="head-actions">
-                <button id="btnScanTargets" class="btn btn-ghost btn-sm">扫描占用</button>
-                <button id="btnSelectSafe" class="btn btn-ghost btn-sm">选择安全项</button>
-                <button id="btnSelectNone" class="btn btn-ghost btn-sm">清空选择</button>
-                <button id="btnEmptyBin" class="btn btn-ghost btn-sm">清空回收站</button>
+              <div class="actions-bar">
+                <button id="btnScanTargets" class="btn btn-act btn-sm">扫描占用</button>
+                <button id="btnSelectSafe" class="btn btn-act btn-sm">选择安全项</button>
+                <button id="btnSelectNone" class="btn btn-act btn-sm">清空选择</button>
+                <button id="btnEmptyBin" class="btn btn-act btn-sm">清空回收站</button>
                 <button id="btnCleanDisk" class="btn btn-danger btn-sm">清理选中项</button>
               </div>
             </div>
-            <div id="cTargets" class="target-list"><p class="cell-sub">正在统计各项占用，请稍候…</p></div>
+            </div>
+            <div id="cTargets" class="target-list list-box"><p class="cell-sub">正在统计各项占用，请稍候…</p></div>
             <div class="target-total" id="cTargetTotal">-</div>
           </div>
         </div>
@@ -254,14 +256,17 @@
             <div class="card-head">
               <h3>大文件</h3>
               <div class="head-actions">
-                <select id="cDrive" class="select-sm"></select>
-                <input id="cMinMb" class="input-sm" type="number" value="200" min="10" step="50">
-                <span class="cell-sub">MB 以上</span>
-                <button id="btnScanFiles" class="btn btn-ghost btn-sm">扫描大文件</button>
+              <div class="filter-bar">
+                <label class="field"><span class="field-label">分区</span><select id="cDrive" class="select-sm"></select></label>
+                <label class="field"><span class="field-label">大于</span><input id="cMinMb" class="input-sm" type="number" value="200" min="10" step="50" style="width:80px"><span class="field-unit">MB</span></label>
+              </div>
+              <div class="actions-bar">
+                <button id="btnScanFiles" class="btn btn-act btn-sm">扫描大文件</button>
                 <button id="btnCleanFiles" class="btn btn-danger btn-sm">删除选中（送回收站）</button>
               </div>
             </div>
-            <div id="cFiles" class="file-list"><p class="cell-sub">点击「扫描大文件」开始查找占用空间的大文件…</p></div>
+            </div>
+            <div id="cFiles" class="file-list list-box"><p class="cell-sub">点击「扫描大文件」开始查找占用空间的大文件…</p></div>
             <div class="target-total" id="cFilesTotal">-</div>
           </div>
 
@@ -276,24 +281,28 @@
             <div class="card-head">
               <h3>微信清理 · 缓存 / 照片 / 视频</h3>
               <div class="head-actions">
-                <select id="cWxKind" class="select-sm">
+              <div class="filter-bar">
+                <label class="field"><span class="field-label">类型</span><select id="cWxKind" class="select-sm">
                   <option value="all">全部类型</option>
                   <option value="cache">缓存</option>
                   <option value="image">照片</option>
                   <option value="video">视频</option>
                   <option value="file">其他文件</option>
-                </select>
-                <button id="btnWxSelectKind" class="btn btn-ghost btn-sm">全选当前分类</button>
-                <button id="btnWxSortSize" class="btn btn-ghost btn-sm">按大小 ▼</button>
-                <button id="btnWxSortTime" class="btn btn-ghost btn-sm">按时间</button>
-                <button id="btnScanWechat" class="btn btn-ghost btn-sm">扫描</button>
+                </select></label>
+              </div>
+              <div class="actions-bar">
+                <button id="btnWxSelectKind" class="btn btn-act btn-sm">全选当前分类</button>
+                <button id="btnWxSortSize" class="btn btn-act btn-sm">按大小 ▼</button>
+                <button id="btnWxSortTime" class="btn btn-act btn-sm">按时间</button>
+                <button id="btnScanWechat" class="btn btn-act btn-sm">扫描</button>
                 <button id="btnCleanWechat" class="btn btn-danger btn-sm">删除选中（送回收站）</button>
               </div>
             </div>
-            <div id="cWxSummary" class="target-list">
+            </div>
+            <div id="cWxSummary" class="target-list list-box">
               <p class="cell-sub">点击「扫描」查看微信缓存与聊天图片 / 视频的占用情况…</p>
             </div>
-            <div id="cWxFiles" class="file-list">
+            <div id="cWxFiles" class="file-list list-box">
               <p class="cell-sub">扫描后可在此按大小或时间排序，并勾选要清理的文件。</p>
             </div>
             <div class="target-total" id="cWxTotal">-</div>
@@ -311,20 +320,23 @@
             <div class="card-head">
               <h3>软件清理 · 已安装软件 / 缓存</h3>
               <div class="head-actions">
-                <input id="cSoftFilter" class="input-sm" type="text"
-                       placeholder="过滤名称 / 厂商" style="width:150px">
-                <select id="cSoftSource" class="select-sm">
+              <div class="filter-bar">
+                <label class="field"><span class="field-label">过滤</span><input id="cSoftFilter" class="input-sm" type="text" placeholder="名称 / 厂商" style="width:150px"></label>
+                <label class="field"><span class="field-label">来源</span><select id="cSoftSource" class="select-sm">
                   <option value="all">全部来源</option>
                   <option value="installed">已安装软件</option>
                   <option value="agents">AI 工具缓存</option>
-                </select>
-                <button id="btnScanSoftAll" class="btn btn-ghost btn-sm">扫描全部软件</button>
-                <button id="btnSoftAllSortSize" class="btn btn-ghost btn-sm">按大小 ▼</button>
-                <button id="btnSoftAllSortName" class="btn btn-ghost btn-sm">按名称</button>
-                <button id="btnSelectAllSoft" class="btn btn-ghost btn-sm">全选</button>
+                </select></label>
+              </div>
+              <div class="actions-bar">
+                <button id="btnScanSoftAll" class="btn btn-act btn-sm">扫描全部软件</button>
+                <button id="btnSoftAllSortSize" class="btn btn-act btn-sm">按大小 ▼</button>
+                <button id="btnSoftAllSortName" class="btn btn-act btn-sm">按名称</button>
+                <button id="btnSelectAllSoft" class="btn btn-act btn-sm">全选</button>
                 <button id="btnUninstallSoft" class="btn btn-warn btn-sm">卸载选中</button>
                 <button id="btnCleanSoftSelected" class="btn btn-danger btn-sm">清理选中缓存</button>
               </div>
+            </div>
             </div>
             <p class="cell-sub" id="cSoftAllSummary">正在扫描本机全部软件…</p>
             <div class="table-scroll" style="max-height:330px">
@@ -350,17 +362,21 @@
             <div class="card-head">
               <h3 id="cSoftFileTitle">可清理文件</h3>
               <div class="head-actions">
-                <select id="cSoftFileScope" class="select-sm">
+              <div class="filter-bar">
+                <label class="field"><span class="field-label">范围</span><select id="cSoftFileScope" class="select-sm">
                   <option value="cache">仅缓存 / 日志</option>
                   <option value="all">全部文件</option>
-                </select>
-                <button id="btnSoftFileSortSize" class="btn btn-ghost btn-sm">按大小 ▼</button>
-                <button id="btnSoftFileSortTime" class="btn btn-ghost btn-sm">按时间</button>
-                <button id="btnSoftFileSelectAll" class="btn btn-ghost btn-sm">全选</button>
+                </select></label>
+              </div>
+              <div class="actions-bar">
+                <button id="btnSoftFileSortSize" class="btn btn-act btn-sm">按大小 ▼</button>
+                <button id="btnSoftFileSortTime" class="btn btn-act btn-sm">按时间</button>
+                <button id="btnSoftFileSelectAll" class="btn btn-act btn-sm">全选</button>
                 <button id="btnSoftFileDelete" class="btn btn-danger btn-sm">删除选中（送回收站）</button>
               </div>
             </div>
-            <div id="cSoftFiles" class="file-list">
+            </div>
+            <div id="cSoftFiles" class="file-list list-box">
               <p class="cell-sub">点击上方软件列表中的一项，查看它的可清理文件。</p>
             </div>
             <div class="target-total" id="cSoftFileTotal">-</div>
@@ -377,62 +393,64 @@
     </div>
   </section>
 
-  <!-- ============ 文件搜索面板 ============ -->
+  <!-- ============ 文件查找面板 ============ -->
   <section class="panel" id="searchPanel" hidden>
     <div class="card">
       <div class="card-head">
-        <h3>文件搜索 · 文件与文件夹</h3>
+        <h3>文件查找 · 文件与文件夹</h3>
         <div class="head-actions">
-          <select id="fDrive" class="select-sm"></select>
-          <input id="fRoot" class="input-sm" type="text" placeholder="起始目录（可留空）"
-                 style="width:170px">
-          <input id="fKey" class="input-sm" type="text" placeholder="名称关键字，回车搜索"
-                 style="width:210px">
-          <select id="fMode" class="select-sm">
-            <option value="all">文件 + 文件夹</option>
-            <option value="file">仅文件</option>
-            <option value="dir">仅文件夹</option>
-          </select>
-          <select id="fSecs" class="select-sm">
-            <option value="10">10 秒</option>
-            <option value="20" selected>20 秒</option>
-            <option value="45">45 秒</option>
-            <option value="90">90 秒</option>
-          </select>
-          <button id="btnSearchFiles" class="btn btn-primary btn-sm">搜索</button>
+          <div class="filter-bar">
+            <label class="field"><span class="field-label">范围</span><select id="fDrive" class="select-sm"></select></label>
+            <label class="field"><span class="field-label">起始目录</span><input id="fRoot" class="input-sm" type="text" placeholder="可留空" style="width:150px"></label>
+            <label class="field"><span class="field-label">名称关键字</span><input id="fKey" class="input-sm" type="text" placeholder="回车搜索" style="width:200px"></label>
+            <label class="field"><span class="field-label">类型</span><select id="fMode" class="select-sm">
+              <option value="all">文件 + 文件夹</option>
+              <option value="file">仅文件</option>
+              <option value="dir">仅文件夹</option>
+            </select></label>
+            <label class="field"><span class="field-label">时限</span><select id="fSecs" class="select-sm">
+              <option value="10">10 秒</option>
+              <option value="20" selected>20 秒</option>
+              <option value="45">45 秒</option>
+              <option value="90">90 秒</option>
+            </select></label>
+          </div>
+          <div class="actions-bar">
+            <button id="btnSearchFiles" class="btn btn-primary btn-sm">搜索</button>
+          </div>
         </div>
       </div>
 
       <div class="search-opts">
-        <input id="fExt" class="input-sm" type="text" placeholder="扩展名，如 .log"
-               style="width:120px">
-        <input id="fMinMb" class="input-sm" type="number" min="0" step="10" value="0"
-               style="width:88px">
-        <span class="cell-sub">MB 以上</span>
-        <select id="fDepth" class="select-sm">
-          <option value="5">深度 5</option>
-          <option value="7" selected>深度 7</option>
-          <option value="10">深度 10</option>
-        </select>
-        <label class="chk"><input type="checkbox" id="fDirSize"> 统计文件夹占用</label>
-        <span class="grow"></span>
-        <button id="btnFSortSize" class="btn btn-ghost btn-sm">按大小 ▼</button>
-        <button id="btnFSortTime" class="btn btn-ghost btn-sm">按时间</button>
-        <button id="btnFSortName" class="btn btn-ghost btn-sm">按名称</button>
-        <button id="btnFSelectAll" class="btn btn-ghost btn-sm">全选</button>
-        <button id="btnFMeasure" class="btn btn-ghost btn-sm">测算占用</button>
-        <button id="btnFReveal" class="btn btn-ghost btn-sm">打开位置</button>
-        <button id="btnFDelete" class="btn btn-danger btn-sm">删除选中（送回收站）</button>
+        <div class="filter-bar">
+          <label class="field"><span class="field-label">扩展名</span><input id="fExt" class="input-sm" type="text" placeholder="如 .log" style="width:110px"></label>
+          <label class="field"><span class="field-label">大于</span><input id="fMinMb" class="input-sm" type="number" min="0" step="10" value="0" style="width:78px"><span class="field-unit">MB</span></label>
+          <label class="field"><span class="field-label">深度</span><select id="fDepth" class="select-sm">
+            <option value="5">5</option>
+            <option value="7" selected>7</option>
+            <option value="10">10</option>
+          </select></label>
+          <label class="chk"><input type="checkbox" id="fDirSize"> 统计文件夹占用</label>
+        </div>
+        <div class="actions-bar">
+          <button id="btnFSortSize" class="btn btn-act btn-sm">按大小 ▼</button>
+          <button id="btnFSortTime" class="btn btn-act btn-sm">按时间</button>
+          <button id="btnFSortName" class="btn btn-act btn-sm">按名称</button>
+          <button id="btnFSelectAll" class="btn btn-act btn-sm">全选</button>
+          <button id="btnFMeasure" class="btn btn-act btn-sm">测算占用</button>
+          <button id="btnFReveal" class="btn btn-act btn-sm">打开位置</button>
+          <button id="btnFDelete" class="btn btn-danger btn-sm">删除选中（送回收站）</button>
+        </div>
       </div>
 
-      <p class="cell-sub" id="fSummary">输入名称关键字后回车，即可在所选分区查找匹配的文件与文件夹。</p>
-      <div id="fResults" class="file-list"><p class="cell-sub">尚无搜索结果。</p></div>
+      <p class="cell-sub" id="fSummary">输入名称关键字后回车，即可在所选范围（默认全盘）查找匹配的文件与文件夹。</p>
+      <div id="fResults" class="file-list list-box"><p class="cell-sub">尚无搜索结果。</p></div>
       <div class="target-total" id="fTotal">-</div>
     </div>
 
     <p class="tip">
-      支持按名称关键字查找<strong>文件与文件夹</strong>：多个关键字用空格分隔（全部命中才算匹配）、
-      可指定扩展名与最小体积、限定分区或起始目录。默认不实时统计文件夹体积（很慢），
+      支持按名称关键字查找<strong>文件与文件夹</strong>：默认<strong>全盘（所有分区）</strong>扫描，也可在「范围」里选某个指定分区或填起始目录；
+      多个关键字用空格分隔（全部命中才算匹配）、可指定扩展名与最小体积。默认不实时统计文件夹体积（很慢），
       需要时可勾选「统计文件夹占用」或对结果点「测算占用」。系统目录与依赖目录会自动跳过，
       删除一律送入回收站，受保护的系统文件会被自动跳过。
     </p>

@@ -126,7 +126,7 @@ TAB_TITLES = {
     "ports": "端口占用",
     "monitor": "系统监控",
     "cleanup": "磁盘清理",
-    "search": "文件搜索",
+    "search": "文件查找",
 }
 
 #: 页签在 Notebook 中的顺序，_on_tab_changed 靠索引反查页签名
@@ -159,7 +159,7 @@ NUMERIC_KEYS = {"pid", "ppid", "cpu", "memory_mb", "local_port"}
 SOFT_SOURCE_MAP = {"全部来源": "all", "已安装软件": "installed", "AI 工具缓存": "agents"}
 #: 软件清理：文件范围下拉
 SOFT_SCOPE_MAP = {"仅缓存 / 日志": "cache", "全部文件": "all"}
-#: 文件搜索：类型下拉
+#: 文件查找：类型下拉
 FS_MODE_MAP = {"文件 + 文件夹": "all", "仅文件": "file", "仅文件夹": "dir"}
 
 
@@ -302,15 +302,24 @@ class App:
 
         # ---- 按钮 ----
         # 按钮：描边更深、hover / pressed 逐层加深，选中态（primary）用深主色
-        style.configure("TButton", background="#ffffff", foreground=TEXT_STRONG,
-                        bordercolor=BORDER_STRONG, lightcolor="#ffffff",
-                        darkcolor=BORDER_STRONG, relief="flat",
+        # 可操作按钮：背景加深的浅蓝灰实心填充，描边与 hover / pressed 逐层加深
+        style.configure("TButton", background="#e9eef7", foreground=TEXT_STRONG,
+                        bordercolor=BORDER_STRONG, lightcolor="#e9eef7",
+                        darkcolor="#c8d2e2", relief="flat",
                         padding=(13, 7), font=(FONT, 9, "bold"))
         style.map("TButton",
-                  background=[("active", GRAY_DEEP), ("pressed", "#dcdce3"),
+                  background=[("active", "#dde5f1"), ("pressed", "#ccd6e6"),
                               ("disabled", CARD)],
-                  bordercolor=[("active", "#b9b9c2")],
+                  bordercolor=[("active", "#a7a9b5")],
                   foreground=[("disabled", "#9ca3af")])
+        # 次要按钮：更浅，用于纯辅助操作
+        style.configure("Ghost.TButton", background="#f3f4f8", foreground=TEXT_STRONG,
+                        bordercolor="#c2c4cd", lightcolor="#f3f4f8", darkcolor="#d6d8e0",
+                        relief="flat", padding=(13, 7), font=(FONT, 9, "bold"))
+        style.map("Ghost.TButton",
+                  background=[("active", GRAY_DEEP), ("pressed", "#d6d8e0"),
+                              ("disabled", CARD)],
+                  bordercolor=[("active", "#a7a9b5")])
         style.configure("Primary.TButton", background=PRIMARY_DARK, foreground="#ffffff",
                         bordercolor=PRIMARY_DARK, lightcolor=PRIMARY_DARK,
                         darkcolor=PRIMARY_DEEP, relief="flat", padding=(16, 8),
@@ -403,7 +412,7 @@ class App:
         brand.pack(side="left", padx=13)
         tk.Label(brand, text="Windows进程管理工具（潍鲸 - weijing.co）", bg=CARD, fg=TEXT_STRONG,
                  font=(FONT, 14, "bold")).pack(anchor="w")
-        tk.Label(brand, text=f"服务 · 进程 · 端口 · 系统监控 · 磁盘清理 · 文件搜索        "
+        tk.Label(brand, text=f"服务 · 进程 · 端口 · 系统监控 · 磁盘清理 · 文件查找        "
                              f"版本 v{app_version()}（{APP_RELEASE_DATE}）",
                  bg=CARD, fg=MUTED, font=(FONT, 9)).pack(anchor="w")
 
@@ -1141,7 +1150,7 @@ class App:
         self.soft_source_var = tk.StringVar(value="all")
         self.soft_scope_var = tk.StringVar(value="cache")
 
-        # --- 文件搜索相关状态 ---
+        # --- 文件查找相关状态 ---
         self.fs_tree = None
         self.fs_rows = []
         self.fs_hint = ""
@@ -2208,7 +2217,7 @@ class App:
 
         self._clean_async(work, "启动卸载程序", done)
 
-    # ---- 文件搜索（顶层页签） ----
+    # ---- 文件查找（顶层页签） ----
 
     def search_load_drives(self) -> None:
         try:
@@ -2226,7 +2235,7 @@ class App:
     def do_search_files(self) -> None:
         kw = (self.fs_key_var.get() or "").strip()
         if not kw:
-            messagebox.showinfo("文件搜索", "请输入要查找的文件或文件夹名称关键字。")
+            messagebox.showinfo("文件查找", "请输入要查找的文件或文件夹名称关键字。")
             return
         combo = getattr(self, "fs_drive_combo", None)
         drive = ""
@@ -2269,9 +2278,9 @@ class App:
                 f"{r.get('scanned_files', 0)} 个文件 · 用时 {r.get('elapsed', 0)}s"
                 + (" · 已触发时间上限" if r.get("timed_out") else ""))
             self.render_search_rows()
-            self.status_var.set(f"文件搜索完成：{r.get('total_found', 0)} 项")
+            self.status_var.set(f"文件查找完成：{r.get('total_found', 0)} 项")
 
-        self._clean_async(work, "文件搜索", done)
+        self._clean_async(work, "文件查找", done)
 
     def render_search_rows(self) -> None:
         tree = self.fs_tree
@@ -2313,7 +2322,7 @@ class App:
 
     def check_all_search_rows(self) -> None:
         if not self.fs_rows:
-            messagebox.showinfo("文件搜索", "请先执行一次搜索。")
+            messagebox.showinfo("文件查找", "请先执行一次搜索。")
             return
         turn_on = any(not r.get("_checked") for r in self.fs_rows)
         for r in self.fs_rows:
@@ -2353,7 +2362,7 @@ class App:
     def measure_search_selected(self) -> None:
         picked = [r for r in (self.fs_rows or []) if r.get("_checked")]
         if not picked:
-            messagebox.showinfo("文件搜索", "请先双击勾选要测算的结果行。")
+            messagebox.showinfo("文件查找", "请先双击勾选要测算的结果行。")
             return
         targets = [r["path"] for r in picked][:40]
 
@@ -2385,17 +2394,17 @@ class App:
             picked = [r for r in (self.fs_rows or []) if r.get("_checked")]
             path = picked[0]["path"] if picked else ""
         if not path:
-            messagebox.showinfo("文件搜索", "请先选中一行（或勾选一行）。")
+            messagebox.showinfo("文件查找", "请先选中一行（或勾选一行）。")
             return
         ok, msg = software.reveal_path(path)
         self.status_var.set(msg)
         if not ok:
-            messagebox.showwarning("文件搜索", msg)
+            messagebox.showwarning("文件查找", msg)
 
     def delete_search_selected(self) -> None:
         picked = [r for r in (self.fs_rows or []) if r.get("_checked")]
         if not picked:
-            messagebox.showinfo("文件搜索", "请先双击勾选要删除的结果行。")
+            messagebox.showinfo("文件查找", "请先双击勾选要删除的结果行。")
             return
         total = sum(int(r.get("size", 0) or 0) for r in picked)
         if not messagebox.askyesno(
@@ -2423,11 +2432,11 @@ class App:
 
         self._clean_async(work, "删除搜索结果", done)
 
-    # ---- 文件搜索页签界面 ----
+    # ---- 文件查找页签界面 ----
 
     def _build_search_tab(self, frame: ttk.Frame) -> None:
         self.fs_tree = None
-        card = ttk.LabelFrame(frame, text="文件搜索 · 文件与文件夹", padding=(14, 12))
+        card = ttk.LabelFrame(frame, text="文件查找 · 文件与文件夹", padding=(14, 12))
         card.pack(fill="both", expand=True)
 
         bar = tk.Frame(card, bg=CARD)

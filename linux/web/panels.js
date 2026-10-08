@@ -23,7 +23,7 @@ const clean = {
             sort: 'size', order: 'desc', filter: '', source: 'all',
             fileSort: 'size', fileOrder: 'desc', scope: 'cache',
             fileBusy: false },
-  // 顶层「文件搜索」：按名称查找文件与文件夹
+  // 顶层「文件查找」：按名称查找文件与文件夹
   fsearch: { rows: [], sort: 'size', order: 'desc', busy: false, loaded: false },
 };
 
@@ -1089,7 +1089,7 @@ async function doDeleteWechat() {
   );
 }
 
-/* ---------------- 顶层「文件搜索」：查找文件与文件夹 ---------------- */
+/* ---------------- 顶层「文件查找」：查找文件与文件夹 ---------------- */
 
 async function loadSearchDrives() {
   const sel = document.getElementById('fDrive');
@@ -1098,7 +1098,8 @@ async function loadSearchDrives() {
     const json = await api('/api/cleanup/drives');
     const drives = (json.data || []);
     sel.textContent = '';
-    const all = el('option', '', '全部分区');
+    // 默认即「全盘（所有分区）」，亦可任选某个指定分区
+    const all = el('option', '', '全盘（所有分区）');
     all.value = '';
     sel.appendChild(all);
     drives.forEach(d => {
@@ -1106,6 +1107,7 @@ async function loadSearchDrives() {
       o.value = d.mountpoint;
       sel.appendChild(o);
     });
+    sel.value = '';
   } catch (err) {
     if (sel) sel.textContent = '';
   }
@@ -1397,7 +1399,7 @@ function bindPanels() {
     };
   }
 
-  // --- 顶层文件搜索 ---
+  // --- 顶层文件查找 ---
   document.getElementById('btnSearchFiles').onclick = doSearchFiles;
   document.getElementById('btnFSelectAll').onclick = toggleSearchAll;
   document.getElementById('btnFMeasure').onclick = measureSearchSelected;

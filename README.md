@@ -10,7 +10,7 @@
 
 ## 版本一览
 
-**当前版本：v1.1.0（2026-10-08）** · 完整更新记录见 [CHANGELOG.md](CHANGELOG.md)
+**当前版本：v1.2.0（2026-10-08）** · 完整更新记录见 [CHANGELOG.md](CHANGELOG.md)
 
 | 版本 | 形态 | 交付物 | 说明 |
 |---|---|---|---|
@@ -23,7 +23,7 @@
 
 版本号统一由 `VERSION` 文件 + `core/__init__.py`（Windows）/ `linux/core/__init__.py`（Linux）
 的 `APP_VERSION` 常量维护，界面右上角可实时查看；每次发布都会打 Git tag（如 `v1.1.0`），
-需要回滚时 `git checkout v1.1.0` 即可。
+需要回滚时 `git checkout v1.2.0` 即可。
 
 ---
 
@@ -39,7 +39,7 @@
 | 大文件扫描 | 全盘大文件定位 + 风险标签 + 送回收站 |
 | 微信清理 | 缓存 / 照片 / 视频三类分别统计，按大小 / 时间排序，删除送回收站 |
 | 软件清理 | 已安装软件 + AI 编程工具缓存合并为一张清单，默认全量扫描，支持清理缓存与**卸载软件** |
-| 文件搜索 | 顶层菜单：按名称查找文件与文件夹，支持多关键字、扩展名 / 体积过滤、排序、测算占用、打开位置 |
+| 文件查找 | 顶层菜单：按名称查找文件与文件夹，支持多关键字、扩展名 / 体积过滤、排序、测算占用、打开位置 |
 | 内存清理（Linux） | `sync` + `drop_caches` 释放内核页缓存（需 root） |
 
 界面特性：
@@ -53,7 +53,7 @@
 
 ## 下载与安装
 
-从 GitHub Releases 下载对应版本（当前版本 **v1.1.0**，历史版本可在 Releases 页按 tag 取用）：
+从 GitHub Releases 下载对应版本（当前版本 **v1.2.0**，历史版本可在 Releases 页按 tag 取用）：
 
 - **Windows（Web 版）**：`WindowsProcessManager.exe`
 - **Windows（桌面版）**：`WindowsProcessManager-Desktop.exe`
