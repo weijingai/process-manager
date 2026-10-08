@@ -45,8 +45,10 @@ if not os.path.isdir(WEB_DIR):  # 单文件模式下也允许从 exe 同级目�
 sys.path.insert(0, BASE_DIR)
 
 from core import cleanup, control, monitor, scanner, textutil  # noqa: E402
+from core import APP_VERSION, app_version, software  # noqa: E402
 
 DEFAULT_PORT = 8765
+APP_VERSION_CURRENT = app_version()
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -63,7 +65,7 @@ MIME_TYPES = {
 
 
 class ApiHandler(BaseHTTPRequestHandler):
-    server_version = "WinProcManager/1.0"
+    server_version = f"WinProcManager/{app_version()}"
     protocol_version = "HTTP/1.1"  # keep-alive 复用连接，降低轮询开销
 
     # ---------------- 基础 ----------------
@@ -142,6 +144,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "ok": True,
                 "data": {
+                    "version": app_version(),
                     "admin": control.is_admin(),
                     "hostname": socket.gethostname(),
                     "python": sys.version.split()[0],
@@ -212,6 +215,168 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": f"扫描大文件失败：{exc}"}, 500)
             return
 
+        if path == "/api/cleanup/wechat":
+            # 微信可清理项概览：缓存 / 聊天图片 / 聊天视频 / 聊天文件（只读）
+            try:
+                self._send_json({"ok": True, "data": cleanup.wechat_summary()})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"扫描微信缓存失败：{exc}"}, 500)
+            return
+
+        if path == "/api/cleanup/wechat-files":
+            # 微信聊天图片/视频/缓存/文件清单，支持按大小或时间排序（只读）
+            kind = str(query.get("kind", ["all"])[0]).strip().lower()
+            sort_by = str(query.get("sort", ["size"])[0]).strip().lower()
+            order = str(query.get("order", ["desc"])[0]).strip().lower()
+            limit = query.get("limit", ["500"])[0]
+            if kind not in ("all", "cache", "image", "video", "file"):
+                kind = "all"
+            if sort_by not in ("size", "time"):
+                sort_by = "size"
+            try:
+                data = cleanup.scan_wechat_media(
+                    kind=kind, sort_by=sort_by, order=order,
+                    limit=max(1, min(int(limit or 500), 5000)))
+                self._send_json({"ok": True, "data": data})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"扫描微信文件失败：{exc}"}, 500)
+            return
+
+        if path == "/api/cleanup/agents":
+            # Vibe Coding / AI 编程工具占用概览：每个工具一张卡片（只读）
+            try:
+                self._send_json({"ok": True, "data": cleanup.agent_summary()})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"扫描编程工具缓存失败：{exc}"}, 500)
+            return
+
+        if path == "/api/cleanup/agent-files":
+            # 指定编程工具（或全部已检出工具）的缓存文件清单，支持按大小 / 时间排序（只读）
+            tool = str(query.get("tool", [""])[0]).strip()
+            sort_by = str(query.get("sort", ["size"])[0]).strip().lower()
+            order = str(query.get("order", ["desc"])[0]).strip().lower()
+            limit = query.get("limit", ["500"])[0]
+            if sort_by not in ("size", "time"):
+                sort_by = "size"
+            try:
+                data = cleanup.scan_agent_files(
+                    tool_id=tool, sort_by=sort_by, order=order,
+                    limit=max(1, min(int(limit or 500), 5000)))
+                self._send_json({"ok": True, "data": data})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"扫描编程工具缓存文件失败：{exc}"}, 500)
+            return
+
+        if path == "/api/cleanup/software":
+            # 全盘搜索软件目录（只读），命中结果会回填给 AI 编程工具 / 微信清理
+            drive = str(query.get("drive", [""])[0]).strip()
+            q = str(query.get("q", [""])[0]).strip()
+            cat = str(query.get("category", ["all"])[0]).strip() or "all"
+            secs = query.get("max_seconds", ["25"])[0]
+            try:
+                data = cleanup.scan_software_dirs(
+                    drive=drive, query=q, category=cat,
+                    max_seconds=max(5.0, min(float(secs or 25), 120.0)))
+                self._send_json({"ok": True, "data": data})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"全盘搜索软件目录失败：{exc}"}, 500)
+            return
+
+        if path == "/api/cleanup/software-files":
+            # 某个软件目录下的文件清单，支持按大小 / 时间排序；默认只看缓存 / 日志子目录
+            target = str(query.get("target", [""])[0]).strip()
+            scope = str(query.get("scope", ["cache"])[0]).strip().lower()
+            sort_by = str(query.get("sort", ["size"])[0]).strip().lower()
+            order = str(query.get("order", ["desc"])[0]).strip().lower()
+            limit = query.get("limit", ["500"])[0]
+            if scope not in ("cache", "all"):
+                scope = "cache"
+            if sort_by not in ("size", "time"):
+                sort_by = "size"
+            try:
+                data = cleanup.scan_software_files(
+                    target=target, scope=scope, sort_by=sort_by, order=order,
+                    limit=max(1, min(int(limit or 500), 5000)))
+                self._send_json({"ok": True, "data": data})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"读取软件目录文件失败：{exc}"}, 500)
+            return
+
+        # ---- 软件清理（已安装软件 + AI 工具缓存，合并展示） ----
+
+        if path == "/api/cleanup/software-list":
+            # 合并清单：系统已安装软件（可卸载）+ AI 编程工具缓存（可清理）
+            inc_dir = str(query.get("discovered", ["0"])[0]) in ("1", "true", "yes")
+            secs = query.get("max_seconds", ["25"])[0]
+            try:
+                data = software.software_cleanup_summary(
+                    include_discovered=inc_dir,
+                    max_seconds=max(5.0, min(float(secs or 25), 120.0)))
+                self._send_json({"ok": True, "data": data})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"扫描软件清单失败：{exc}"}, 500)
+            return
+
+        if path == "/api/cleanup/software-cache-files":
+            # 某个软件的可清理文件清单，支持按大小 / 时间排序（只读）
+            key = str(query.get("key", [""])[0]).strip()
+            scope = str(query.get("scope", ["cache"])[0]).strip().lower()
+            sort_by = str(query.get("sort", ["size"])[0]).strip().lower()
+            order = str(query.get("order", ["desc"])[0]).strip().lower()
+            limit = query.get("limit", ["400"])[0]
+            if scope not in ("cache", "all"):
+                scope = "cache"
+            if sort_by not in ("size", "time"):
+                sort_by = "size"
+            try:
+                data = software.software_cache_files(
+                    key=key, scope=scope, sort_by=sort_by, order=order,
+                    limit=max(1, min(int(limit or 400), 5000)))
+                self._send_json({"ok": True, "data": data})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"读取软件缓存文件失败：{exc}"}, 500)
+            return
+
+        # ---- 文件搜索（顶层菜单：查找文件与文件夹） ----
+
+        if path == "/api/search/drives":
+            try:
+                self._send_json({"ok": True, "data": software.list_search_drives()})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"读取分区列表失败：{exc}"}, 500)
+            return
+
+        if path == "/api/search/files":
+            kw = str(query.get("q", [""])[0]).strip()
+            drive = str(query.get("drive", [""])[0]).strip()
+            root = str(query.get("root", [""])[0]).strip()
+            mode = str(query.get("mode", ["all"])[0]).strip().lower()
+            ext = str(query.get("ext", [""])[0]).strip()
+            min_mb = query.get("min_mb", ["0"])[0]
+            sort_by = str(query.get("sort", ["size"])[0]).strip().lower()
+            order = str(query.get("order", ["desc"])[0]).strip().lower()
+            limit = query.get("limit", ["400"])[0]
+            secs = query.get("max_seconds", ["20"])[0]
+            depth = query.get("depth", ["7"])[0]
+            with_size = str(query.get("dir_size", ["0"])[0]) in ("1", "true", "yes")
+            if mode not in ("all", "file", "dir"):
+                mode = "all"
+            if sort_by not in ("size", "time", "name"):
+                sort_by = "size"
+            try:
+                data = software.search_files(
+                    keyword=kw, drive=drive, root=root, mode=mode, ext=ext,
+                    min_size_mb=max(0.0, float(min_mb or 0)),
+                    sort_by=sort_by, order=order,
+                    limit=max(1, min(int(limit or 400), 2000)),
+                    max_seconds=max(3.0, min(float(secs or 20), 120.0)),
+                    max_depth=max(1, min(int(depth or 7), 16)),
+                    with_dir_size=with_size)
+                self._send_json({"ok": True, "data": data})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"文件搜索失败：{exc}"}, 500)
+            return
+
         if path.startswith("/api/"):
             self._send_json({"ok": False, "error": "接口不存在"}, 404)
             return
@@ -269,6 +434,35 @@ class ApiHandler(BaseHTTPRequestHandler):
             dry = bool(body.get("dry_run", True))
             ok, result = cleanup.clean_disk(ids, dry_run=dry)
             self._send_json({"ok": ok, "message": result.pop("message", ""), "data": result})
+            return
+
+        if path == "/api/search/measure":
+            # 测算搜索结果里文件 / 文件夹的真实占用（只读）
+            paths = [str(p) for p in (body.get("paths") or [])]
+            secs = body.get("max_seconds", 20)
+            try:
+                data = software.measure_paths(
+                    paths, max_seconds=max(3.0, min(float(secs or 20), 120.0)))
+                self._send_json({"ok": True, "data": data})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"测算占用失败：{exc}"}, 500)
+            return
+
+        if path == "/api/search/reveal":
+            # 在资源管理器中打开文件所在位置 / 打开文件夹
+            ok, msg = software.reveal_path(str(body.get("path", "")).strip())
+            self._send_json({"ok": ok, "message": msg})
+            return
+
+        if path == "/api/cleanup/uninstall":
+            # 卸载软件：只允许使用注册表里登记的卸载命令，外部命令一律拒绝
+            ident = str(body.get("ident", "")).strip()
+            quiet = bool(body.get("quiet", False))
+            try:
+                ok, msg = software.uninstall_software(ident, quiet=quiet)
+                self._send_json({"ok": ok, "message": msg})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"卸载失败：{exc}"}, 500)
             return
 
         if path == "/api/cleanup/delete-files":
@@ -357,6 +551,7 @@ def main() -> int:
     url = f"http://127.0.0.1:{port}"
     print("=" * 56)
     print("  Windows进程管理工具（潍鲸 - weijing.co） 已启动")
+    print(f"  版本：v{app_version()}")
     print(f"  访问地址：{url}")
     print(f"  管理员权限：{'是' if control.is_admin() else '否（停止系统服务可能失败）'}")
     print("  关闭此窗口即可退出工具")

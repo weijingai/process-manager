@@ -184,6 +184,10 @@ async function loadStatus() {
     badge.className = `badge ${d.admin ? 'badge-green' : 'badge-orange'}`;
     badge.textContent = d.admin ? '✓ root 权限' : '⚠ 非 root 权限';
     document.getElementById('btnElevate').hidden = d.admin;
+
+    // 版本号由后端 core 统一提供，便于对照 CHANGELOG.md 回滚
+    const verBadge = document.getElementById('verBadge');
+    if (verBadge && d.version) verBadge.textContent = 'v' + d.version;
   } catch (e) { /* 忽略 */ }
 }
 

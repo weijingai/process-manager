@@ -29,7 +29,8 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-from core import cleanup, control, monitor, scanner, textutil  # noqa: E402
+from core import APP_RELEASE_DATE, app_version, cleanup, control, monitor  # noqa: E402
+from core import scanner, software, textutil  # noqa: E402
 
 MAX_ROWS = 1000
 
@@ -46,10 +47,15 @@ TEXT = "#1d1d1f"
 TEXT_STRONG = "#000000"
 MUTED = "#86868b"
 PRIMARY = "#007aff"
-PRIMARY_DARK = "#0071e3"
+PRIMARY_DARK = "#0060df"
+PRIMARY_DEEP = "#0058cc"       # 选中态：比常规主色更深，浅背景下更醒目
 PRIMARY_SOFT = "#e5f0ff"
+PRIMARY_SOFT_DEEP = "#d3e6ff"  # 选中卡片底色
+ACTIVE_BG = "#dce9fb"          # 列表选中行底色
+BORDER_STRONG = "#cfcfd6"      # 控件描边
+GRAY_DEEP = "#e8e8ed"          # hover 底色
 GREEN = "#34c759"
-RED = "#ff3b30"
+RED = "#e02d26"
 ORANGE = "#ff9500"
 
 #: 概览卡片标题 -> 顶部色条颜色
@@ -120,10 +126,11 @@ TAB_TITLES = {
     "ports": "端口占用",
     "monitor": "系统监控",
     "cleanup": "磁盘清理",
+    "search": "文件搜索",
 }
 
 #: 页签在 Notebook 中的顺序，_on_tab_changed 靠索引反查页签名
-TAB_ORDER = ("running", "services", "processes", "ports", "monitor", "cleanup")
+TAB_ORDER = ("running", "services", "processes", "ports", "monitor", "cleanup", "search")
 
 #: 内存/监控面板自动刷新的 ms 间隔
 MONITOR_INTERVAL_MS = 2000
@@ -148,14 +155,24 @@ DEFAULT_SORT = {
 
 NUMERIC_KEYS = {"pid", "ppid", "cpu", "memory_mb", "local_port"}
 
+#: 软件清理：来源下拉（中文显示值 -> 接口参数）
+SOFT_SOURCE_MAP = {"全部来源": "all", "已安装软件": "installed", "AI 工具缓存": "agents"}
+#: 软件清理：文件范围下拉
+SOFT_SCOPE_MAP = {"仅缓存 / 日志": "cache", "全部文件": "all"}
+#: 文件搜索：类型下拉
+FS_MODE_MAP = {"文件 + 文件夹": "all", "仅文件": "file", "仅文件夹": "dir"}
+
 
 # --------------------------------------------------------------------------- #
 # 辅助
 # --------------------------------------------------------------------------- #
 
-def clip(value) -> str:
-    """返回字段的完整文本（不再按长度截断隐藏）。"""
-    return "" if value is None else str(value)
+def clip(value, limit: int = 0) -> str:
+    """返回字段文本；limit > 0 时按字符长度截断（兼容旧调用，limit=0 表示不截断）。"""
+    text = "" if value is None else str(value)
+    if limit and len(text) > limit:
+        return text[:limit - 1] + "…"
+    return text
 
 
 def fmt_cell(row: dict, key: str) -> str:
@@ -232,7 +249,8 @@ class App:
         except Exception:
             pass
 
-        root.title("Windows进程管理工具（潍鲸 - weijing.co）")
+        self.app_version = app_version()
+        root.title(f"Windows进程管理工具（潍鲸 - weijing.co） v{self.app_version}")
         root.geometry("1320x840")
         root.minsize(1000, 640)
         self._configure_style()
@@ -263,7 +281,7 @@ class App:
 
         # ---- 容器 / 文本 ----
         style.configure("TFrame", background=BG)
-        style.configure("TLabel", background=BG, foreground=TEXT, font=(FONT, 9))
+        style.configure("TLabel", background=BG, foreground=TEXT_STRONG, font=(FONT, 9))
         style.configure("Card.TLabel", background=CARD, foreground=TEXT, font=(FONT, 9))
         style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(FONT, 9))
         style.configure("CardMuted.TLabel", background=CARD, foreground=MUTED, font=(FONT, 9))
@@ -277,25 +295,29 @@ class App:
                         font=(FONT, 16, "bold"))
 
         # ---- 分组框 ----
-        style.configure("TLabelframe", background=CARD, bordercolor=BORDER, relief="flat")
+        style.configure("TLabelframe", background=CARD, bordercolor=BORDER_STRONG,
+                        relief="flat")
         style.configure("TLabelframe.Label", background=CARD, foreground=TEXT_STRONG,
                         font=(FONT, 10, "bold"))
 
         # ---- 按钮 ----
-        style.configure("TButton", background=CARD, foreground=TEXT, bordercolor=BORDER,
-                        lightcolor=CARD, darkcolor=BORDER, relief="flat",
-                        padding=(13, 7), font=(FONT, 9))
+        # 按钮：描边更深、hover / pressed 逐层加深，选中态（primary）用深主色
+        style.configure("TButton", background="#ffffff", foreground=TEXT_STRONG,
+                        bordercolor=BORDER_STRONG, lightcolor="#ffffff",
+                        darkcolor=BORDER_STRONG, relief="flat",
+                        padding=(13, 7), font=(FONT, 9, "bold"))
         style.map("TButton",
-                  background=[("active", "#f2f2f7"), ("pressed", "#e8e8ed"),
+                  background=[("active", GRAY_DEEP), ("pressed", "#dcdce3"),
                               ("disabled", CARD)],
-                  bordercolor=[("active", "#c7c7cc")],
+                  bordercolor=[("active", "#b9b9c2")],
                   foreground=[("disabled", "#9ca3af")])
-        style.configure("Primary.TButton", background=PRIMARY, foreground="#ffffff",
-                        bordercolor=PRIMARY, lightcolor=PRIMARY, darkcolor=PRIMARY_DARK,
-                        relief="flat", padding=(16, 8), font=(FONT, 9, "bold"))
+        style.configure("Primary.TButton", background=PRIMARY_DARK, foreground="#ffffff",
+                        bordercolor=PRIMARY_DARK, lightcolor=PRIMARY_DARK,
+                        darkcolor=PRIMARY_DEEP, relief="flat", padding=(16, 8),
+                        font=(FONT, 9, "bold"))
         style.map("Primary.TButton",
-                  background=[("active", PRIMARY_DARK), ("pressed", PRIMARY_DARK)],
-                  bordercolor=[("active", PRIMARY_DARK)])
+                  background=[("active", PRIMARY_DEEP), ("pressed", PRIMARY_DEEP)],
+                  bordercolor=[("active", PRIMARY_DEEP)])
         style.configure("Danger.TButton", background=RED, foreground="#ffffff",
                         bordercolor=RED, lightcolor=RED, darkcolor="#b91c1c",
                         relief="flat", padding=(15, 8), font=(FONT, 9, "bold"))
@@ -307,26 +329,28 @@ class App:
         style.configure("Treeview", background=CARD, fieldbackground=CARD,
                         bordercolor=BORDER, borderwidth=1, relief="flat",
                         rowheight=30, font=(FONT, 9))
-        style.configure("Treeview.Heading", background="#fafafa", foreground=MUTED,
-                        bordercolor=BORDER, relief="flat", padding=(8, 6),
+        style.configure("Treeview.Heading", background="#eff2f7", foreground=TEXT_STRONG,
+                        bordercolor=BORDER_STRONG, relief="flat", padding=(8, 6),
                         font=(FONT, 9, "bold"))
-        style.map("Treeview.Heading", background=[("active", "#f0f0f2")])
+        style.map("Treeview.Heading", background=[("active", "#e2e6ee")])
         style.map("Treeview",
-                  background=[("selected", PRIMARY_SOFT)],
-                  foreground=[("selected", TEXT_STRONG)])
+                  background=[("selected", ACTIVE_BG)],
+                  foreground=[("selected", PRIMARY_DEEP)])
 
         # ---- 输入 / 选择 ----
         for name in ("TEntry", "TCombobox", "TSpinbox"):
-            style.configure(name, fieldbackground=CARD, background=CARD, foreground=TEXT,
-                            bordercolor=BORDER, relief="flat", arrowcolor=MUTED,
-                            padding=(7, 5))
-            style.map(name, bordercolor=[("focus", PRIMARY)],
+            style.configure(name, fieldbackground=CARD, background=CARD,
+                            foreground=TEXT_STRONG, bordercolor=BORDER_STRONG,
+                            relief="flat", arrowcolor=TEXT, padding=(7, 5))
+            style.map(name, bordercolor=[("focus", PRIMARY_DEEP)],
                       arrowcolor=[("disabled", "#9ca3af")])
-        style.configure("TCheckbutton", background=BG, foreground=TEXT, font=(FONT, 9),
-                        indicatorcolor=PRIMARY, indicatorbackground=CARD)
+        style.configure("TCheckbutton", background=BG, foreground=TEXT_STRONG,
+                        font=(FONT, 9), indicatorcolor=PRIMARY_DEEP,
+                        indicatorbackground=CARD)
         style.map("TCheckbutton", background=[("active", BG)])
-        style.configure("Card.TCheckbutton", background=CARD, foreground=TEXT,
-                        font=(FONT, 9), indicatorcolor=PRIMARY, indicatorbackground=CARD)
+        style.configure("Card.TCheckbutton", background=CARD, foreground=TEXT_STRONG,
+                        font=(FONT, 9), indicatorcolor=PRIMARY_DEEP,
+                        indicatorbackground=CARD)
         style.map("Card.TCheckbutton", background=[("active", CARD)])
 
         # ---- 进度条 / 滚动条 / 分隔线 ----
@@ -379,7 +403,8 @@ class App:
         brand.pack(side="left", padx=13)
         tk.Label(brand, text="Windows进程管理工具（潍鲸 - weijing.co）", bg=CARD, fg=TEXT_STRONG,
                  font=(FONT, 14, "bold")).pack(anchor="w")
-        tk.Label(brand, text="服务 · 进程 · 端口 · 系统监控 · 磁盘清理",
+        tk.Label(brand, text=f"服务 · 进程 · 端口 · 系统监控 · 磁盘清理 · 文件搜索        "
+                             f"版本 v{app_version()}（{APP_RELEASE_DATE}）",
                  bg=CARD, fg=MUTED, font=(FONT, 9)).pack(anchor="w")
 
         ttk.Button(top, text="刷新扫描", style="Primary.TButton",
@@ -420,12 +445,16 @@ class App:
         # ---------- 内容区 ----------
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=14, pady=(11, 0))
+        builders = {
+            "monitor": self._build_monitor_tab,
+            "cleanup": self._build_cleanup_tab,
+            "search": self._build_search_tab,
+        }
         for key in TAB_ORDER:
             frame = ttk.Frame(self.notebook, padding=(8, 6))
             self.notebook.add(frame, text=TAB_TITLES[key])
-            if key in ("monitor", "cleanup"):
-                builder = self._build_monitor_tab if key == "monitor" else self._build_cleanup_tab
-                builder(frame)
+            if key in builders:
+                builders[key](frame)
             else:
                 self._build_tab(frame, key)
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -438,6 +467,8 @@ class App:
         self.status_var = tk.StringVar(value="准备就绪")
         ttk.Label(foot, textvariable=self.status_var,
                   style="CardMuted.TLabel").pack(side="right", padx=(0, 12))
+        tk.Label(foot, text=f"v{app_version()}", bg=CARD, fg=PRIMARY_DEEP,
+                 font=(FONT, 9, "bold")).pack(side="right", padx=(0, 10))
         self.progress = ttk.Progressbar(foot, mode="indeterminate", length=150)
         self.progress.pack(side="right")
 
@@ -449,10 +480,10 @@ class App:
         self.tab_buttons: list[tk.Label] = []
         self.hover_index = -1
         for idx, key in enumerate(TAB_ORDER):
-            btn = tk.Label(parent, text=TAB_TITLES[key], bg=CARD, fg=MUTED,
-                           font=(FONT, 11), padx=22, pady=10,
-                           highlightthickness=1, highlightbackground=BORDER,
-                           highlightcolor=BORDER, cursor="hand2")
+            btn = tk.Label(parent, text=TAB_TITLES[key], bg=CARD, fg="#3c3c43",
+                           font=(FONT, 11, "bold"), padx=22, pady=10,
+                           highlightthickness=1, highlightbackground=BORDER_STRONG,
+                           highlightcolor=BORDER_STRONG, cursor="hand2")
             btn.pack(side="left", padx=(0, 12))
             btn.bind("<Button-1>", lambda _e, i=idx: self.select_tab(i))
             btn.bind("<Enter>", lambda _e, i=idx: self._hover_tab(i, True))
@@ -466,15 +497,25 @@ class App:
     def _paint_tabs(self) -> None:
         cur = TAB_ORDER.index(self.tab) if self.tab in TAB_ORDER else 0
         for i, btn in enumerate(getattr(self, "tab_buttons", [])):
+            # 当前页签：白底 + 深蓝粗体 + 实心描边；未选：浅灰字，hover 加深
             if i == cur:
-                btn.configure(bg=PRIMARY_SOFT, fg=PRIMARY,
-                              highlightbackground=PRIMARY, highlightcolor=PRIMARY)
+                btn.configure(bg="#ffffff", fg=PRIMARY_DEEP,
+                              font=(FONT, 11, "bold"),
+                              highlightbackground=PRIMARY_DARK,
+                              highlightcolor=PRIMARY_DARK,
+                              highlightthickness=2)
             elif i == self.hover_index:
-                btn.configure(bg="#f3f6fc", fg=TEXT_STRONG,
-                              highlightbackground="#a9c3f5", highlightcolor="#a9c3f5")
+                btn.configure(bg="#eef1f7", fg=TEXT_STRONG,
+                              font=(FONT, 11, "bold"),
+                              highlightbackground="#b9b9c2",
+                              highlightcolor="#b9b9c2",
+                              highlightthickness=1)
             else:
-                btn.configure(bg=CARD, fg=MUTED,
-                              highlightbackground=BORDER, highlightcolor=BORDER)
+                btn.configure(bg=CARD, fg="#3c3c43",
+                              font=(FONT, 11, "bold"),
+                              highlightbackground=BORDER_STRONG,
+                              highlightcolor=BORDER_STRONG,
+                              highlightthickness=1)
 
     def select_tab(self, idx: int) -> None:
         try:
@@ -739,8 +780,8 @@ class App:
                         fieldbackground=CARD, borderwidth=0, relief="flat",
                         font=(FONT, 10), rowheight=30)
         style.map("Nav.Treeview",
-                  background=[("selected", PRIMARY_SOFT)],
-                  foreground=[("selected", PRIMARY)])
+                  background=[("selected", ACTIVE_BG)],
+                  foreground=[("selected", PRIMARY_DEEP)])
 
         body = tk.Frame(parent, bg=BG)
         body.pack(fill="both", expand=True)
@@ -1067,6 +1108,59 @@ class App:
 
     def _build_cleanup_tab(self, frame: ttk.Frame) -> None:
 
+        # --- 微信清理相关状态 ---
+        self.wx_tree = None
+        self.wx_rows = []
+        self.wx_sort = "size"       # size | time
+        self.wx_order = "desc"      # desc | asc
+        self.wx_kind_var = tk.StringVar(value="all")
+        self.wx_total_var = tk.StringVar(value="双击行可勾选 / 取消")
+        self.wx_summary_var = tk.StringVar(value="点击「扫描」查看微信缓存 / 照片 / 视频占用…")
+
+        # --- 软件清理（已安装软件 + AI 工具缓存，合并展示）相关状态 ---
+        self.soft_all_tree = None
+        self.soft_file_tree = None
+        self.soft_file_frame = None
+        self.soft_items = []
+        self.soft_rows = []
+        self.soft_counts = {}
+        self.soft_checked = {}
+        self.soft_target = ""
+        self.soft_hint = ""
+        self.soft_label = ""
+        self.soft_sort = "cache"       # cache | size | name
+        self.soft_order = "desc"       # desc | asc
+        self.soft_file_sort = "size"   # size | time
+        self.soft_file_order = "desc"
+        self.soft_loaded = False
+        self.soft_all_summary_var = tk.StringVar(
+            value="打开本页会自动扫描；也可点「扫描全部软件」重新扫描…")
+        self.soft_all_total_var = tk.StringVar(value="双击行可勾选 / 取消")
+        self.soft_file_total_var = tk.StringVar(value="双击行可勾选 / 取消")
+        self.soft_filter_var = tk.StringVar(value="")
+        self.soft_source_var = tk.StringVar(value="all")
+        self.soft_scope_var = tk.StringVar(value="cache")
+
+        # --- 文件搜索相关状态 ---
+        self.fs_tree = None
+        self.fs_rows = []
+        self.fs_hint = ""
+        self.fs_sort = "size"          # size | time | name
+        self.fs_order = "desc"
+        self.fs_drive_values = [""]
+        self.fs_key_var = tk.StringVar(value="")
+        self.fs_root_var = tk.StringVar(value="")
+        self.fs_drive_var = tk.StringVar(value="")
+        self.fs_mode_var = tk.StringVar(value="文件 + 文件夹")
+        self.fs_seconds_var = tk.StringVar(value="20")
+        self.fs_ext_var = tk.StringVar(value="")
+        self.fs_minmb_var = tk.StringVar(value="0")
+        self.fs_depth_var = tk.StringVar(value="7")
+        self.fs_dirsize_var = tk.BooleanVar(value=False)
+        self.fs_summary_var = tk.StringVar(
+            value="输入文件 / 文件夹名称关键字后回车，即可查找。")
+        self.fs_total_var = tk.StringVar(value="双击行可勾选 / 取消")
+
         def build_mem(f):
             mem_card = ttk.LabelFrame(f, text="内存清理", padding=(14, 12))
             mem_card.pack(fill="x")
@@ -1118,6 +1212,171 @@ class App:
             self.target_tree.pack(fill="x", pady=(8, 0))
             self.target_tree.bind("<Double-1>", self.toggle_target_row)
 
+        def build_wechat(f):
+            wx_card = ttk.LabelFrame(f, text="微信缓存 / 聊天文件清理", padding=(14, 12))
+            wx_card.pack(fill="both", expand=True)
+            wbar = tk.Frame(wx_card, bg=CARD)
+            wbar.pack(fill="x")
+            ttk.Label(wbar, text="类型：", style="CardMuted.TLabel").pack(side="left")
+            self.wx_kind_combo = ttk.Combobox(wbar, state="readonly", width=12,
+                                              textvariable=self.wx_kind_var)
+            self.wx_kind_combo["values"] = ("all", "cache", "image", "video", "file")
+            self.wx_kind_combo.current(0)
+            self.wx_kind_combo.pack(side="left")
+            ttk.Button(wbar, text="全选当前分类",
+                       command=self.check_all_wechat).pack(side="left", padx=(10, 0))
+            ttk.Button(wbar, text="扫描", command=self.scan_wechat).pack(side="left", padx=12)
+            ttk.Button(wbar, text="删除选中（送回收站）", style="Danger.TButton",
+                       command=self.delete_selected_wechat).pack(side="right")
+            ttk.Label(wbar, textvariable=self.wx_total_var,
+                      style="CardMuted.TLabel").pack(side="right", padx=14)
+
+            ttk.Label(wx_card, textvariable=self.wx_summary_var,
+                      style="CardMuted.TLabel", wraplength=1100).pack(anchor="w", pady=(6, 0))
+
+            w_cols = ("sel", "name", "kind", "size", "mtime", "path")
+            self.wx_tree = ttk.Treeview(wx_card, columns=w_cols, show="headings",
+                                        height=10, style="Plain.Treeview")
+            self.wx_tree.tag_configure("striped", background="#fafbfe")
+            for cid, title, width, anchor in (("sel", "选中", 48, "center"),
+                                              ("name", "文件名", 170, "w"),
+                                              ("kind", "类型", 80, "center"),
+                                              ("size", "大小", 90, "e"),
+                                              ("mtime", "修改时间", 140, "center"),
+                                              ("path", "路径", 520, "w")):
+                self.wx_tree.heading(cid, text=title)
+                self.wx_tree.column(cid, width=width, anchor=anchor, stretch=(cid == "path"))
+            # 点击「大小」「修改时间」列头即可切换排序
+            self.wx_tree.heading("size", command=lambda: self.sort_wechat("size"))
+            self.wx_tree.heading("mtime", command=lambda: self.sort_wechat("time"))
+            w_vsb = ttk.Scrollbar(wx_card, orient="vertical", command=self.wx_tree.yview)
+            w_hsb = ttk.Scrollbar(wx_card, orient="horizontal", command=self.wx_tree.xview)
+            self.wx_tree.configure(yscrollcommand=w_vsb.set, xscrollcommand=w_hsb.set)
+            w_pane = tk.Frame(wx_card, bg=CARD)
+            w_pane.pack(fill="both", expand=True, pady=(8, 0))
+            self.wx_tree.grid(in_=w_pane, row=0, column=0, sticky="nsew")
+            w_vsb.grid(in_=w_pane, row=0, column=1, sticky="ns")
+            w_hsb.grid(in_=w_pane, row=1, column=0, sticky="ew")
+            w_pane.grid_rowconfigure(0, weight=1)
+            w_pane.grid_columnconfigure(0, weight=1)
+            self.wx_tree.bind("<Double-1>", self.toggle_wechat_row)
+
+        def build_agent(f):
+            soft_card = ttk.LabelFrame(f, text="软件清理 · 已安装软件 / 缓存", padding=(14, 12))
+            soft_card.pack(fill="both", expand=True)
+
+            bar = tk.Frame(soft_card, bg=CARD)
+            bar.pack(fill="x")
+            ttk.Label(bar, text="过滤：", style="CardMuted.TLabel").pack(side="left")
+            filter_entry = ttk.Entry(bar, width=16, textvariable=self.soft_filter_var)
+            filter_entry.pack(side="left")
+            filter_entry.bind("<Return>", lambda e: self.render_soft_all())
+            ttk.Button(bar, text="应用过滤",
+                       command=self.render_soft_all).pack(side="left", padx=(6, 0))
+            ttk.Label(bar, text="来源：", style="CardMuted.TLabel").pack(side="left", padx=(14, 0))
+            src_combo = ttk.Combobox(bar, state="readonly", width=12,
+                                     values=("全部来源", "已安装软件", "AI 工具缓存"),
+                                     textvariable=self.soft_source_var)
+            src_combo.current(0)
+            src_combo.pack(side="left")
+            src_combo.bind("<<ComboboxSelected>>", lambda e: self.render_soft_all())
+            ttk.Button(bar, text="扫描全部软件", style="Primary.TButton",
+                       command=self.scan_soft_all).pack(side="left", padx=14)
+            ttk.Button(bar, text="全选",
+                       command=self.select_all_soft_rows).pack(side="left")
+            ttk.Button(bar, text="卸载选中",
+                       command=self.do_uninstall_soft).pack(side="left", padx=8)
+            ttk.Button(bar, text="清理选中缓存", style="Danger.TButton",
+                       command=self.do_clean_soft_selected).pack(side="right")
+            ttk.Label(bar, textvariable=self.soft_all_total_var,
+                      style="CardMuted.TLabel").pack(side="right", padx=14)
+
+            ttk.Label(soft_card, textvariable=self.soft_all_summary_var,
+                      style="CardMuted.TLabel", wraplength=1100).pack(anchor="w", pady=(6, 0))
+
+            s_cols = ("sel", "name", "source", "pub", "size", "cache", "loc")
+            self.soft_all_tree = ttk.Treeview(soft_card, columns=s_cols, show="headings",
+                                              height=13, style="Plain.Treeview")
+            self.soft_all_tree.tag_configure("striped", background="#fafbfe")
+            self.soft_all_tree.tag_configure("onrow", background=ACTIVE_BG)
+            for cid, title, width, anchor in (("sel", "选中", 48, "center"),
+                                              ("name", "软件名称", 210, "w"),
+                                              ("source", "来源", 92, "center"),
+                                              ("pub", "厂商 / 版本", 190, "w"),
+                                              ("size", "体积", 96, "e"),
+                                              ("cache", "可清理", 96, "e"),
+                                              ("loc", "安装位置", 320, "w")):
+                self.soft_all_tree.heading(cid, text=title)
+                self.soft_all_tree.column(cid, width=width, anchor=anchor,
+                                          stretch=(cid == "loc"))
+            # 点击列头切换排序
+            self.soft_all_tree.heading("name", command=lambda: self.sort_soft_all("name"))
+            self.soft_all_tree.heading("size", command=lambda: self.sort_soft_all("size"))
+            self.soft_all_tree.heading("cache", command=lambda: self.sort_soft_all("cache"))
+            s_vsb = ttk.Scrollbar(soft_card, orient="vertical",
+                                  command=self.soft_all_tree.yview)
+            s_hsb = ttk.Scrollbar(soft_card, orient="horizontal",
+                                  command=self.soft_all_tree.xview)
+            self.soft_all_tree.configure(yscrollcommand=s_vsb.set, xscrollcommand=s_hsb.set)
+            s_pane = tk.Frame(soft_card, bg=CARD)
+            s_pane.pack(fill="both", expand=True, pady=(8, 0))
+            self.soft_all_tree.grid(in_=s_pane, row=0, column=0, sticky="nsew")
+            s_vsb.grid(in_=s_pane, row=0, column=1, sticky="ns")
+            s_hsb.grid(in_=s_pane, row=1, column=0, sticky="ew")
+            s_pane.grid_rowconfigure(0, weight=1)
+            s_pane.grid_columnconfigure(0, weight=1)
+            self.soft_all_tree.bind("<<TreeviewSelect>>", self.on_soft_all_select)
+            self.soft_all_tree.bind("<Double-1>", self.toggle_soft_all_row)
+
+            # ---- 选中软件的可清理文件 ----
+            self.soft_file_frame = ttk.LabelFrame(f, text="可清理文件", padding=(14, 12))
+            self.soft_file_frame.pack(fill="both", expand=True, pady=(12, 0))
+            fbar = tk.Frame(self.soft_file_frame, bg=CARD)
+            fbar.pack(fill="x")
+            ttk.Label(fbar, text="范围：", style="CardMuted.TLabel").pack(side="left")
+            scope_combo = ttk.Combobox(fbar, state="readonly", width=12,
+                                       values=("仅缓存 / 日志", "全部文件"),
+                                       textvariable=self.soft_scope_var)
+            scope_combo.current(0)
+            scope_combo.pack(side="left")
+            scope_combo.bind("<<ComboboxSelected>>", lambda e: self.load_soft_files())
+            ttk.Button(fbar, text="全选",
+                       command=self.check_all_soft_files).pack(side="left", padx=12)
+            ttk.Button(fbar, text="删除选中（送回收站）", style="Danger.TButton",
+                       command=self.delete_selected_soft_files).pack(side="right")
+            ttk.Label(fbar, textvariable=self.soft_file_total_var,
+                      style="CardMuted.TLabel").pack(side="right", padx=14)
+
+            sf_cols = ("sel", "name", "size", "mtime", "path")
+            self.soft_file_tree = ttk.Treeview(self.soft_file_frame, columns=sf_cols,
+                                               show="headings", height=10,
+                                               style="Plain.Treeview")
+            self.soft_file_tree.tag_configure("striped", background="#fafbfe")
+            for cid, title, width, anchor in (("sel", "选中", 48, "center"),
+                                              ("name", "文件名", 200, "w"),
+                                              ("size", "大小", 96, "e"),
+                                              ("mtime", "修改时间", 140, "center"),
+                                              ("path", "路径", 480, "w")):
+                self.soft_file_tree.heading(cid, text=title)
+                self.soft_file_tree.column(cid, width=width, anchor=anchor,
+                                           stretch=(cid == "path"))
+            self.soft_file_tree.heading("size", command=lambda: self.sort_soft_file("size"))
+            self.soft_file_tree.heading("mtime", command=lambda: self.sort_soft_file("time"))
+            sf_vsb = ttk.Scrollbar(self.soft_file_frame, orient="vertical",
+                                   command=self.soft_file_tree.yview)
+            sf_hsb = ttk.Scrollbar(self.soft_file_frame, orient="horizontal",
+                                   command=self.soft_file_tree.xview)
+            self.soft_file_tree.configure(yscrollcommand=sf_vsb.set,
+                                          xscrollcommand=sf_hsb.set)
+            sf_pane = tk.Frame(self.soft_file_frame, bg=CARD)
+            sf_pane.pack(fill="both", expand=True, pady=(8, 0))
+            self.soft_file_tree.grid(in_=sf_pane, row=0, column=0, sticky="nsew")
+            sf_vsb.grid(in_=sf_pane, row=0, column=1, sticky="ns")
+            sf_hsb.grid(in_=sf_pane, row=1, column=0, sticky="ew")
+            sf_pane.grid_rowconfigure(0, weight=1)
+            sf_pane.grid_columnconfigure(0, weight=1)
+            self.soft_file_tree.bind("<Double-1>", self.toggle_soft_file_row)
+
         def build_files(f):
             file_card = ttk.LabelFrame(f, text="大文件", padding=(14, 12))
             file_card.pack(fill="both", expand=True)
@@ -1165,11 +1424,14 @@ class App:
             ("mem", "内存清理", build_mem),
             ("disk", "磁盘空间", build_disk),
             ("files", "大文件", build_files),
+            ("wechat", "微信清理", build_wechat),
+            ("agent", "软件清理", build_agent),
         ])
 
         tip = ttk.Label(frame, style="Muted.TLabel", wraplength=1200, text=(
             "删除的文件默认送入回收站，可随时还原。位于 Windows / Program Files 等系统保护目录的文件"
-            "会被自动跳过，无法通过该工具删除；标记为「高风险」的项目请确认后果后再操作。"))
+            "会被自动跳过，无法通过该工具删除；标记为「高风险」的项目请确认后果后再操作。"
+            "「软件清理」把已安装软件与 AI 编程工具缓存合并展示，卸载命令取自系统登记的卸载信息。"))
         tip.pack(anchor="w", pady=(8, 0))
 
         self.root.after(300, self.load_drives)
@@ -1224,6 +1486,10 @@ class App:
         self.drive_combo["values"] = (
             ["全部分区"] + [f"{d['mountpoint']}  可用 {d['free_text']}" for d in drives])
         self.drive_combo.current(0)
+        combo = getattr(self, "soft_drive_combo", None)
+        if combo is not None:
+            combo["values"] = self.drive_combo["values"]
+            combo.current(0)
 
     # ---- 内存 ----
 
@@ -1456,6 +1722,807 @@ class App:
 
         self._clean_async(work, "删除大文件", done)
 
+    # ---- 微信缓存 / 聊天文件 ----
+
+    def scan_wechat(self) -> None:
+        tree = self.wx_tree
+        if tree is not None:
+            tree.delete(*tree.get_children())
+        kind = self.wx_kind_var.get() or "all"
+        sort_by = getattr(self, "wx_sort", "size")
+        order = getattr(self, "wx_order", "desc")
+
+        def work():
+            return (cleanup.wechat_summary(),
+                    cleanup.scan_wechat_media(kind=kind, sort_by=sort_by,
+                                              order=order, limit=500))
+
+        def done(r):
+            if isinstance(r, Exception):
+                return
+            summary, media = r
+            self.wx_rows = media["rows"]
+            if not summary["installed"]:
+                self.wx_summary_var.set(
+                    "未检测到微信数据目录（本机可能未安装微信，或聊天文件保存在其他位置）。")
+            else:
+                parts = [f"{g['name']} {g['size_text']}（{g['count']} 个文件）"
+                         for g in summary["groups"]]
+                self.wx_summary_var.set(
+                    f"微信可清理合计 {summary['total_text']} · " + " · ".join(parts))
+            self._render_wechat()
+            self.status_var.set(
+                f"微信扫描完成：{media['total_found']} 个文件，当前按"
+                f"{'大小' if sort_by == 'size' else '时间'}"
+                f"{'降序' if order == 'desc' else '升序'}")
+
+        self._clean_async(work, "微信清理扫描", done)
+
+    def sort_wechat(self, by: str) -> None:
+        """点击列头切换排序；同一列再次点击反转升降序。"""
+        if getattr(self, "wx_sort", "size") == by:
+            self.wx_order = "asc" if getattr(self, "wx_order", "desc") == "desc" else "desc"
+        else:
+            self.wx_sort = by
+            self.wx_order = "desc"
+        self.scan_wechat()
+
+    def _render_wechat(self) -> None:
+        tree = self.wx_tree
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        for i, f in enumerate(self.wx_rows):
+            iid = f"w{i}"
+            tree.insert("", "end", iid=iid, values=(
+                "[√]" if f.get("_checked") else "[ ]",
+                clip(f["name"], 34), f["kind_text"], f["size_text"],
+                f["mtime"], f["path"]), tags=(("striped",) if i % 2 else ()))
+        self._update_wx_total()
+
+    def toggle_wechat_row(self, event=None) -> None:
+        tree = self.wx_tree
+        if tree is None:
+            return
+        iid = tree.identify_row(event.y) if event else None
+        if not iid:
+            sel = tree.selection()
+            iid = sel[0] if sel else None
+        if not iid or not iid.startswith("w"):
+            return
+        idx = int(iid[1:])
+        if idx >= len(self.wx_rows):
+            return
+        f = self.wx_rows[idx]
+        f["_checked"] = not f.get("_checked")
+        tree.set(iid, "sel", "[√]" if f["_checked"] else "[ ]")
+        self._update_wx_total()
+
+    def _update_wx_total(self) -> None:
+        picked = [f for f in self.wx_rows if f.get("_checked")]
+        total = sum(f["size"] for f in picked)
+        self.wx_total_var.set(
+            f"已选中 {len(picked)} 个文件 · 合计 {cleanup.human_bytes(total)}")
+
+    def delete_selected_wechat(self) -> None:
+        picked = [f for f in self.wx_rows if f.get("_checked")]
+        if not picked:
+            messagebox.showinfo("删除微信文件", "请先双击勾选要删除的文件。")
+            return
+        text = "\n".join(f"· {f['name']}（{f['size_text']}）" for f in picked[:10])
+        if len(picked) > 10:
+            text += f"\n…以及另外 {len(picked) - 10} 个文件"
+        if not messagebox.askyesno(
+                "确认删除",
+                f"即将把以下 {len(picked)} 个微信文件（合计 "
+                f"{cleanup.human_bytes(sum(f['size'] for f in picked))}）送入回收站：\n{text}"
+                "\n\n删除后聊天记录中的图片 / 视频将无法查看，可从回收站还原。"):
+            return
+
+        paths = [f["path"] for f in picked]
+
+        def work():
+            return cleanup.delete_files(paths, use_recycle=True)
+
+        def done(r):
+            if isinstance(r, Exception):
+                return
+            _ok, payload = r
+            messagebox.showinfo("删除微信文件", payload.get("message", "已提交删除"))
+            self.scan_wechat()
+
+        self._clean_async(work, "删除微信文件", done)
+
+    # ---- Vibe Coding 工具缓存 ----
+
+    def check_all_wechat(self) -> None:
+        """把当前分类列表里的文件全部勾选 / 取消。"""
+        rows = getattr(self, "wx_rows", []) or []
+        if not rows:
+            messagebox.showinfo("微信清理", "当前分类没有可勾选的文件。")
+            return
+        turn_on = any(not f.get("_checked") for f in rows)
+        for f in rows:
+            f["_checked"] = turn_on
+        self._render_wechat()
+
+    # ---- 软件清理：默认扫描本机全部软件（已安装软件 + AI 工具缓存） ----
+
+    def _auto_scan_soft(self) -> None:
+        """首次切到磁盘清理页时自动扫描全部软件（避免用户还要手动点按钮）。"""
+        if not getattr(self, "soft_loaded", False):
+            self.scan_soft_all()
+
+    def scan_soft_all(self) -> None:
+        def work():
+            return software.software_cleanup_summary(max_seconds=25.0)
+
+        def done(r):
+            self.soft_items = r.get("items") or []
+            self.soft_counts = r.get("counts") or {}
+            self.soft_checked = {}
+            self.soft_loaded = True
+            self.soft_hint = ""
+            self.soft_all_summary_var.set(
+                f"{r.get('count', 0)} 项软件"
+                f"（已安装 {self.soft_counts.get('installed', 0)} · "
+                f"AI 工具缓存 {self.soft_counts.get('agents', 0)}"
+                + (f" · 扫描发现 {self.soft_counts.get('discovered', 0)}"
+                   if self.soft_counts.get('discovered') else "") + "）"
+                f" · 可清理合计 {r.get('total_cache_text', '0 B')}"
+                f" · 用时 {r.get('elapsed', 0)}s"
+                + (" · 已触发时间上限，未测算项显示「—」" if r.get("timed_out") else ""))
+            self.render_soft_all()
+            if self.soft_target:
+                self.load_soft_files()
+            self.status_var.set(f"软件扫描完成：{r.get('count', 0)} 项")
+
+        self._clean_async(work, "扫描全部软件", done)
+
+    def soft_filtered_items(self) -> list:
+        kw = (self.soft_filter_var.get() or "").strip().lower()
+        source = SOFT_SOURCE_MAP.get(self.soft_source_var.get() or "全部来源", "all")
+        items = list(self.soft_items or [])
+        if source != "all":
+            items = [i for i in items if i.get("source_key") == source]
+        if kw:
+            items = [i for i in items if (
+                kw in str(i.get("name", "")).lower() or
+                kw in str(i.get("publisher", "")).lower() or
+                kw in str(i.get("location", "")).lower())]
+        rev = self.soft_order == "desc"
+        if self.soft_sort == "name":
+            items.sort(key=lambda i: str(i.get("name", "")), reverse=rev)
+        elif self.soft_sort == "size":
+            items.sort(key=lambda i: int(i.get("size", 0) or 0), reverse=rev)
+        else:
+            items.sort(key=lambda i: int(i.get("cache_size", 0) or 0), reverse=rev)
+        return items
+
+    def render_soft_all(self) -> None:
+        tree = self.soft_all_tree
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        items = self.soft_filtered_items()
+        if not items:
+            tree.insert("", "end", values=("[ ]", "（没有匹配的软件，点击「扫描全部软件」重试）",
+                                           "", "", "", "", ""))
+            self.update_soft_all_total()
+            return
+        for i, item in enumerate(items):
+            tags = []
+            if i % 2:
+                tags.append("striped")
+            if item.get("key") == self.soft_target:
+                tags.append("onrow")
+            version = item.get("version") or ""
+            pub = str(item.get("publisher") or "—")
+            tree.insert("", "end", iid=f"sg{i}", tags=tuple(tags), values=(
+                "[√]" if self.soft_checked.get(item.get("key")) else "[ ]",
+                clip(item.get("name", ""), 26),
+                item.get("source", ""),
+                clip(pub, 22) + ((" · v" + version) if version and version != "—" else ""),
+                item.get("size_text", "—") if item.get("size", 0) > 0 else "—",
+                item.get("cache_text", "—"),
+                item.get("location") or "（未提供安装位置）"))
+        self.update_soft_all_total()
+
+    def on_soft_all_select(self, event=None) -> None:
+        tree = self.soft_all_tree
+        if tree is None:
+            return
+        sel = tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if not iid.startswith("sg"):
+            return
+        items = self.soft_filtered_items()
+        idx = int(iid[2:])
+        if idx >= len(items):
+            return
+        item = items[idx]
+        key = item.get("key", "")
+        if key == self.soft_target:
+            return
+        self.soft_target = key
+        self.soft_label = item.get("name", "")
+        self.soft_rows = []
+        self.render_soft_all()
+        self.load_soft_files()
+
+    def toggle_soft_all_row(self, event=None) -> None:
+        tree = self.soft_all_tree
+        if tree is None:
+            return
+        iid = tree.identify_row(event.y) if event else None
+        if not iid:
+            sel = tree.selection()
+            iid = sel[0] if sel else None
+        if not iid or not iid.startswith("sg"):
+            return
+        items = self.soft_filtered_items()
+        idx = int(iid[2:])
+        if idx >= len(items):
+            return
+        key = items[idx].get("key")
+        self.soft_checked[key] = not self.soft_checked.get(key)
+        tree.set(iid, "sel", "[√]" if self.soft_checked.get(key) else "[ ]")
+        self.update_soft_all_total()
+
+    def select_all_soft_rows(self) -> None:
+        items = self.soft_filtered_items()
+        if not items:
+            messagebox.showinfo("软件清理", "当前列表没有可选的项。")
+            return
+        turn_on = any(not self.soft_checked.get(i.get("key")) for i in items)
+        for i in items:
+            self.soft_checked[i.get("key")] = turn_on
+        self.render_soft_all()
+
+    def update_soft_all_total(self) -> None:
+        picked = [i for i in (self.soft_items or []) if self.soft_checked.get(i.get("key"))]
+        cache = sum(int(i.get("cache_size", 0) or 0) for i in picked)
+        can_un = sum(1 for i in picked if i.get("can_uninstall"))
+        self.soft_all_total_var.set(
+            f"已选 {len(picked)} 项 · 可清理 {cleanup.human_bytes(cache)} · 可卸载 {can_un} 项")
+
+    def sort_soft_all(self, by: str) -> None:
+        if getattr(self, "soft_sort", "cache") == by:
+            self.soft_order = "asc" if getattr(self, "soft_order", "desc") == "desc" else "desc"
+        else:
+            self.soft_sort = by
+            self.soft_order = "desc"
+        self.render_soft_all()
+
+    # ---- 软件清理：选中软件的可清理文件 ----
+
+    def load_soft_files(self) -> None:
+        if getattr(self, "soft_file_frame", None) is not None:
+            title = "可清理文件" + (f" · {self.soft_label}" if self.soft_target else "")
+            self.soft_file_frame.configure(text=title)
+        if not self.soft_target:
+            self.soft_rows = []
+            self.render_soft_files()
+            return
+        key = self.soft_target
+        scope = SOFT_SCOPE_MAP.get(self.soft_scope_var.get() or "仅缓存 / 日志", "cache")
+        sort_by = getattr(self, "soft_file_sort", "size")
+        order = getattr(self, "soft_file_order", "desc")
+
+        def work():
+            return software.software_cache_files(key=key, scope=scope,
+                                                 sort_by=sort_by, order=order,
+                                                 limit=400)
+
+        def done(r):
+            self.soft_rows = r.get("rows") or []
+            self.soft_hint = r.get("hint") or ""
+            self.soft_file_dir_text = r.get("dir_size_text", "0 B")
+            self.soft_file_count = r.get("dir_count", 0)
+            self.soft_file_label = r.get("label", "")
+            self.render_soft_files()
+            if self.soft_hint:
+                self.status_var.set(self.soft_hint)
+            else:
+                self.status_var.set(
+                    f"{r.get('label', '')}：{r.get('total_found', 0)} 个文件，"
+                    f"合计 {r.get('dir_size_text', '0 B')}")
+
+        self._clean_async(work, "读取可清理文件", done)
+
+    def render_soft_files(self) -> None:
+        tree = self.soft_file_tree
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        rows = self.soft_rows or []
+        if not rows and self.soft_hint:
+            tree.insert("", "end", values=("[ ]", self.soft_hint, "", "", ""))
+        for i, f in enumerate(rows):
+            tree.insert("", "end", iid=f"sgf{i}", values=(
+                "[√]" if f.get("_checked") else "[ ]",
+                clip(f["name"], 30), f["size_text"], f["mtime"], f["path"]),
+                tags=(("striped",) if i % 2 else ()))
+        self.update_soft_file_total()
+
+    def sort_soft_file(self, by: str) -> None:
+        if getattr(self, "soft_file_sort", "size") == by:
+            self.soft_file_order = ("asc" if getattr(self, "soft_file_order",
+                                                     "desc") == "desc" else "desc")
+        else:
+            self.soft_file_sort = by
+            self.soft_file_order = "desc"
+        if self.soft_target:
+            self.load_soft_files()
+
+    def toggle_soft_file_row(self, event=None) -> None:
+        tree = self.soft_file_tree
+        if tree is None:
+            return
+        iid = tree.identify_row(event.y) if event else None
+        if not iid:
+            sel = tree.selection()
+            iid = sel[0] if sel else None
+        if not iid or not iid.startswith("sgf"):
+            return
+        idx = int(iid[3:])
+        if idx >= len(self.soft_rows):
+            return
+        f = self.soft_rows[idx]
+        f["_checked"] = not f.get("_checked")
+        tree.set(iid, "sel", "[√]" if f["_checked"] else "[ ]")
+        self.update_soft_file_total()
+
+    def check_all_soft_files(self) -> None:
+        if not self.soft_rows:
+            messagebox.showinfo("软件清理", "请先选择一项软件。")
+            return
+        turn_on = any(not f.get("_checked") for f in self.soft_rows)
+        for f in self.soft_rows:
+            f["_checked"] = turn_on
+        self.render_soft_files()
+
+    def update_soft_file_total(self) -> None:
+        picked = [f for f in (self.soft_rows or []) if f.get("_checked")]
+        total = sum(f["size"] for f in picked)
+        self.soft_file_total_var.set(
+            f"已选 {len(picked)} 个文件 · 合计 {cleanup.human_bytes(total)}")
+
+    def delete_selected_soft_files(self) -> None:
+        picked = [f for f in (self.soft_rows or []) if f.get("_checked")]
+        if not picked:
+            messagebox.showinfo("软件清理", "请先双击勾选要删除的文件。")
+            return
+        total = sum(f["size"] for f in picked)
+        if not messagebox.askyesno(
+                "确认删除",
+                f"即将把 {len(picked)} 个缓存文件"
+                f"（合计 {cleanup.human_bytes(total)}）送入回收站：\n\n"
+                + "\n".join("· " + f["name"] for f in picked[:10])
+                + (f"\n…以及另外 {len(picked) - 10} 个" if len(picked) > 10 else "")
+                + "\n\n这些都是缓存 / 日志类可再生数据，删除后软件会自动重建，"
+                  "可从回收站还原。"):
+            return
+
+        def work():
+            return cleanup.delete_files([f["path"] for f in picked], use_recycle=True)
+
+        def done(r):
+            if isinstance(r, Exception):
+                messagebox.showerror("删除失败", str(r))
+                return
+            _ok, info = r
+            messagebox.showinfo(
+                "删除完成",
+                f"已删除 {info.get('deleted', 0)} 个文件，释放 {info.get('freed_text', '0 B')}；"
+                f"跳过 {info.get('skipped', 0)} 个受保护文件，失败 {info.get('failed', 0)} 个。")
+            self.load_soft_files()
+
+        self._clean_async(work, "删除缓存文件", done)
+
+    def do_clean_soft_selected(self) -> None:
+        picked = [i for i in (self.soft_items or []) if self.soft_checked.get(i.get("key"))]
+        if not picked:
+            messagebox.showinfo("软件清理", "请先勾选要清理的软件。")
+            return
+        has_cache = [i for i in picked if int(i.get("cache_size", 0) or 0) > 0 and i.get("paths")]
+        if not has_cache:
+            messagebox.showinfo(
+                "软件清理",
+                "选中的软件没有可识别的缓存目录：\n"
+                "· 已安装软件通常要把缓存写在自身安装目录下才会被识别\n"
+                "· AI 编程工具缓存会在扫描后自动列出\n\n"
+                "如需腾出空间，请勾选缓存 > 0 B 的项，或使用「卸载选中」。")
+            return
+        total = sum(int(i.get("cache_size", 0) or 0) for i in has_cache)
+        if not messagebox.askyesno(
+                "确认清理",
+                f"即将清理 {len(has_cache)} 项软件的缓存"
+                f"（合计约 {cleanup.human_bytes(total)}）：\n\n"
+                + "\n".join("· " + i["name"] + "（" + i.get("cache_text", "") + "）"
+                            for i in has_cache[:12])
+                + (f"\n…以及另外 {len(has_cache) - 12} 项" if len(has_cache) > 12 else "")
+                + "\n\n只清理缓存 / 日志 / 会话历史等可再生数据，"
+                  "账号凭证、用户配置与程序本体不会被删除，文件送入回收站可还原。"):
+            return
+
+        paths: list[str] = []
+        for i in has_cache:
+            paths.extend(i.get("paths") or [])
+
+        def work():
+            return cleanup.delete_files(paths, use_recycle=True)
+
+        def done(r):
+            if isinstance(r, Exception):
+                messagebox.showerror("清理失败", str(r))
+                return
+            _ok, info = r
+            messagebox.showinfo(
+                "清理完成",
+                f"已删除 {info.get('deleted', 0)} 个文件，释放 {info.get('freed_text', '0 B')}；"
+                f"跳过 {info.get('skipped', 0)} 个受保护文件，失败 {info.get('failed', 0)} 个。")
+            self.scan_soft_all()
+
+        self._clean_async(work, "清理软件缓存", done)
+
+    def do_uninstall_soft(self) -> None:
+        picked = [i for i in (self.soft_items or []) if self.soft_checked.get(i.get("key"))]
+        can = [i for i in picked if i.get("can_uninstall")]
+        if not can:
+            messagebox.showinfo(
+                "软件清理",
+                "请勾选支持卸载的已安装软件（来源列显示「已安装」的项）。")
+            return
+        skipped = len(picked) - len(can)
+        if not messagebox.askyesno(
+                "确认卸载",
+                f"即将调用软件自带的卸载程序卸载 {len(can)} 个软件：\n\n"
+                + "\n".join("· " + i["name"] for i in can[:12])
+                + (f"\n…以及另外 {len(can) - 12} 个" if len(can) > 12 else "")
+                + (f"\n\n另有 {skipped} 项未提供卸载命令，已跳过。" if skipped else "")
+                + "\n\n卸载命令取自系统登记的卸载信息，"
+                  "实际进度请在随后弹出的卸载窗口中完成。"):
+            return
+
+        def work():
+            msgs = []
+            for i in can:
+                try:
+                    ok, msg = software.uninstall_software(i.get("ident", ""), quiet=False)
+                except Exception as exc:
+                    ok, msg = False, str(exc)
+                msgs.append((i.get("name", ""), ok, msg))
+            failed = [(n, m) for n, ok, m in msgs if not ok]
+            return {"done": len(msgs) - len(failed), "failed": failed}
+
+        def done(r):
+            text = f"已启动 {r.get('done', 0)} 个卸载程序。"
+            if r.get("failed"):
+                text += "\n\n以下未能启动：\n" + "\n".join(
+                    f"· {n}：{m}" for n, m in r["failed"][:8])
+            messagebox.showinfo("卸载", text)
+            self.scan_soft_all()
+
+        self._clean_async(work, "启动卸载程序", done)
+
+    # ---- 文件搜索（顶层页签） ----
+
+    def search_load_drives(self) -> None:
+        try:
+            values = [""] + [d["value"] for d in software.list_search_drives()]
+        except Exception:
+            values = [""]
+        self.fs_drive_values = values
+        combo = getattr(self, "fs_drive_combo", None)
+        if combo is not None and combo.winfo_exists():
+            if (combo["values"] or ()) == tuple(values):
+                return
+            combo["values"] = values
+            combo.current(0)
+
+    def do_search_files(self) -> None:
+        kw = (self.fs_key_var.get() or "").strip()
+        if not kw:
+            messagebox.showinfo("文件搜索", "请输入要查找的文件或文件夹名称关键字。")
+            return
+        combo = getattr(self, "fs_drive_combo", None)
+        drive = ""
+        if combo is not None:
+            i = combo.current()
+            vals = getattr(self, "fs_drive_values", [""]) or [""]
+            drive = vals[i] if 0 <= i < len(vals) else ""
+        root = (self.fs_root_var.get() or "").strip()
+        mode = FS_MODE_MAP.get(self.fs_mode_var.get() or "文件 + 文件夹", "all")
+        try:
+            secs = max(3.0, min(float(self.fs_seconds_var.get() or 20), 120.0))
+        except Exception:
+            secs = 20.0
+        try:
+            depth = max(1, min(int(self.fs_depth_var.get() or 7), 16))
+        except Exception:
+            depth = 7
+        try:
+            min_mb = max(0.0, float(self.fs_minmb_var.get() or 0))
+        except Exception:
+            min_mb = 0.0
+        ext = (self.fs_ext_var.get() or "").strip()
+        sort_by = getattr(self, "fs_sort", "size")
+        order = getattr(self, "fs_order", "desc")
+        with_size = bool(self.fs_dirsize_var.get())
+
+        def work():
+            return software.search_files(keyword=kw, drive=drive, root=root, mode=mode,
+                                         ext=ext, min_size_mb=min_mb, sort_by=sort_by,
+                                         order=order, limit=500, max_seconds=secs,
+                                         max_depth=depth, with_dir_size=with_size)
+
+        def done(r):
+            self.fs_rows = r.get("rows") or []
+            self.fs_hint = r.get("hint") or ""
+            self.fs_summary_var.set(
+                f"关键字「{r.get('keyword', kw)}」：找到 {r.get('total_found', 0)} 项"
+                f"（显示 {r.get('shown', 0)} 项） · 合计 {r.get('measured_text', '0 B')}"
+                f" · 遍历 {r.get('scanned_dirs', 0)} 个目录 / "
+                f"{r.get('scanned_files', 0)} 个文件 · 用时 {r.get('elapsed', 0)}s"
+                + (" · 已触发时间上限" if r.get("timed_out") else ""))
+            self.render_search_rows()
+            self.status_var.set(f"文件搜索完成：{r.get('total_found', 0)} 项")
+
+        self._clean_async(work, "文件搜索", done)
+
+    def render_search_rows(self) -> None:
+        tree = self.fs_tree
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        rows = self.fs_rows or []
+        if not rows and self.fs_hint:
+            tree.insert("", "end", values=("[ ]", "", self.fs_hint, "", "", "", ""))
+        for i, r in enumerate(rows):
+            tree.insert("", "end", iid=f"fsr{i}", values=(
+                "[√]" if r.get("_checked") else "[ ]",
+                "文件夹" if r.get("is_dir") else "文件",
+                clip(r.get("name", ""), 28),
+                r.get("parent", ""),
+                r.get("size_text", "—"),
+                r.get("mtime", ""),
+                r.get("path", "")),
+                tags=(("striped",) if i % 2 else ()))
+        self.update_search_total()
+
+    def toggle_search_row(self, event=None) -> None:
+        tree = self.fs_tree
+        if tree is None:
+            return
+        iid = tree.identify_row(event.y) if event else None
+        if not iid:
+            sel = tree.selection()
+            iid = sel[0] if sel else None
+        if not iid or not iid.startswith("fsr"):
+            return
+        idx = int(iid[3:])
+        if idx >= len(self.fs_rows):
+            return
+        r = self.fs_rows[idx]
+        r["_checked"] = not r.get("_checked")
+        tree.set(iid, "sel", "[√]" if r["_checked"] else "[ ]")
+        self.update_search_total()
+
+    def check_all_search_rows(self) -> None:
+        if not self.fs_rows:
+            messagebox.showinfo("文件搜索", "请先执行一次搜索。")
+            return
+        turn_on = any(not r.get("_checked") for r in self.fs_rows)
+        for r in self.fs_rows:
+            r["_checked"] = turn_on
+        self.render_search_rows()
+
+    def update_search_total(self) -> None:
+        picked = [r for r in (self.fs_rows or []) if r.get("_checked")]
+        dirs = sum(1 for r in picked if r.get("is_dir"))
+        total = sum(int(r.get("size", 0) or 0) for r in picked)
+        self.fs_total_var.set(
+            f"已选 {len(picked)} 项（文件夹 {dirs} · 文件 {len(picked) - dirs}） · "
+            f"合计 {cleanup.human_bytes(total)}")
+
+    def sort_search(self, by: str) -> None:
+        if getattr(self, "fs_sort", "size") == by:
+            self.fs_order = "asc" if getattr(self, "fs_order", "desc") == "desc" else "desc"
+        else:
+            self.fs_sort = by
+            self.fs_order = "desc" if by != "name" else "asc"
+        self.update_search_sort_btn()
+        if (self.fs_key_var.get() or "").strip():
+            self.do_search_files()
+
+    def update_search_sort_btn(self) -> None:
+        order = getattr(self, "fs_order", "desc")
+        sort = getattr(self, "fs_sort", "size")
+        labels = {"size": "按大小", "time": "按时间", "name": "按名称"}
+        for attr, by in (("fs_btn_size", "size"), ("fs_btn_time", "time"),
+                         ("fs_btn_name", "name")):
+            btn = getattr(self, attr, None)
+            if btn is None:
+                continue
+            tail = (" ▼" if order == "desc" else " ▲") if sort == by else ""
+            btn.configure(text=labels[by] + tail)
+
+    def measure_search_selected(self) -> None:
+        picked = [r for r in (self.fs_rows or []) if r.get("_checked")]
+        if not picked:
+            messagebox.showinfo("文件搜索", "请先双击勾选要测算的结果行。")
+            return
+        targets = [r["path"] for r in picked][:40]
+
+        def work():
+            return software.measure_paths(targets, max_seconds=25.0)
+
+        def done(r):
+            mapping = {i["path"]: i for i in (r.get("items") or [])}
+            for row in self.fs_rows or []:
+                info = mapping.get(row["path"])
+                if info and info.get("size", -1) >= 0:
+                    row["size"] = info["size"]
+                    row["size_text"] = info["size_text"]
+            self.render_search_rows()
+            self.status_var.set(f"已测算 {len(targets)} 项占用，合计 {r.get('total_text', '0 B')}")
+
+        self._clean_async(work, "测算占用", done)
+
+    def reveal_search_selected(self) -> None:
+        tree = self.fs_tree
+        path = ""
+        if tree is not None:
+            sel = tree.selection()
+            if sel and sel[0].startswith("fsr"):
+                idx = int(sel[0][3:])
+                if idx < len(self.fs_rows):
+                    path = self.fs_rows[idx]["path"]
+        if not path:
+            picked = [r for r in (self.fs_rows or []) if r.get("_checked")]
+            path = picked[0]["path"] if picked else ""
+        if not path:
+            messagebox.showinfo("文件搜索", "请先选中一行（或勾选一行）。")
+            return
+        ok, msg = software.reveal_path(path)
+        self.status_var.set(msg)
+        if not ok:
+            messagebox.showwarning("文件搜索", msg)
+
+    def delete_search_selected(self) -> None:
+        picked = [r for r in (self.fs_rows or []) if r.get("_checked")]
+        if not picked:
+            messagebox.showinfo("文件搜索", "请先双击勾选要删除的结果行。")
+            return
+        total = sum(int(r.get("size", 0) or 0) for r in picked)
+        if not messagebox.askyesno(
+                "确认删除",
+                f"即将把 {len(picked)} 项送入回收站：\n\n"
+                + "\n".join("· " + r["name"] for r in picked[:10])
+                + (f"\n…以及另外 {len(picked) - 10} 项" if len(picked) > 10 else "")
+                + (f"\n\n合计 {cleanup.human_bytes(total)}。" if total else "")
+                + "\n\n受系统保护的目录会被自动跳过，删除后可随时从回收站还原。"):
+            return
+
+        def work():
+            return cleanup.delete_files([r["path"] for r in picked], use_recycle=True)
+
+        def done(r):
+            if isinstance(r, Exception):
+                messagebox.showerror("删除失败", str(r))
+                return
+            _ok, info = r
+            messagebox.showinfo(
+                "删除完成",
+                f"已删除 {info.get('deleted', 0)} 项，释放 {info.get('freed_text', '0 B')}；"
+                f"跳过 {info.get('skipped', 0)} 个受保护文件，失败 {info.get('failed', 0)} 个。")
+            self.do_search_files()
+
+        self._clean_async(work, "删除搜索结果", done)
+
+    # ---- 文件搜索页签界面 ----
+
+    def _build_search_tab(self, frame: ttk.Frame) -> None:
+        self.fs_tree = None
+        card = ttk.LabelFrame(frame, text="文件搜索 · 文件与文件夹", padding=(14, 12))
+        card.pack(fill="both", expand=True)
+
+        bar = tk.Frame(card, bg=CARD)
+        bar.pack(fill="x")
+        ttk.Label(bar, text="分区：", style="CardMuted.TLabel").pack(side="left")
+        self.fs_drive_combo = ttk.Combobox(bar, state="readonly", width=16,
+                                           textvariable=self.fs_drive_var)
+        self.fs_drive_combo.pack(side="left")
+        ttk.Label(bar, text="起始目录：", style="CardMuted.TLabel").pack(side="left", padx=(14, 0))
+        ttk.Entry(bar, width=24, textvariable=self.fs_root_var).pack(side="left")
+        ttk.Label(bar, text="关键字：", style="CardMuted.TLabel").pack(side="left", padx=(14, 0))
+        key_entry = ttk.Entry(bar, width=28, textvariable=self.fs_key_var)
+        key_entry.pack(side="left")
+        key_entry.bind("<Return>", lambda e: self.do_search_files())
+        ttk.Label(bar, text="类型：", style="CardMuted.TLabel").pack(side="left", padx=(14, 0))
+        mode_combo = ttk.Combobox(bar, state="readonly", width=12,
+                                  values=tuple(FS_MODE_MAP.keys()),
+                                  textvariable=self.fs_mode_var)
+        mode_combo.current(0)
+        mode_combo.pack(side="left")
+        ttk.Label(bar, text="限时：", style="CardMuted.TLabel").pack(side="left", padx=(14, 0))
+        ttk.Combobox(bar, state="readonly", width=6, values=("10", "20", "45", "90"),
+                     textvariable=self.fs_seconds_var).pack(side="left")
+        ttk.Button(bar, text="搜索", style="Primary.TButton",
+                   command=self.do_search_files).pack(side="right")
+
+        bar2 = tk.Frame(card, bg=CARD)
+        bar2.pack(fill="x", pady=(8, 0))
+        ttk.Label(bar2, text="扩展名：", style="CardMuted.TLabel").pack(side="left")
+        ttk.Entry(bar2, width=10, textvariable=self.fs_ext_var).pack(side="left")
+        ttk.Label(bar2, text="大小 ≥", style="CardMuted.TLabel").pack(side="left", padx=(14, 0))
+        ttk.Entry(bar2, width=6, textvariable=self.fs_minmb_var).pack(side="left")
+        ttk.Label(bar2, text="MB", style="CardMuted.TLabel").pack(side="left", padx=(3, 0))
+        ttk.Label(bar2, text="深度：", style="CardMuted.TLabel").pack(side="left", padx=(14, 0))
+        ttk.Combobox(bar2, state="readonly", width=5, values=("5", "7", "10"),
+                     textvariable=self.fs_depth_var).pack(side="left")
+        ttk.Checkbutton(bar2, text="统计文件夹占用", style="Card.TCheckbutton",
+                        variable=self.fs_dirsize_var).pack(side="left", padx=(14, 0))
+        ttk.Button(bar2, text="删除选中（送回收站）", style="Danger.TButton",
+                   command=self.delete_search_selected).pack(side="right")
+        ttk.Button(bar2, text="打开位置",
+                   command=self.reveal_search_selected).pack(side="right", padx=(0, 8))
+        ttk.Button(bar2, text="测算占用",
+                   command=self.measure_search_selected).pack(side="right", padx=(0, 8))
+        ttk.Button(bar2, text="全选",
+                   command=self.check_all_search_rows).pack(side="right", padx=(0, 8))
+        self.fs_btn_name = ttk.Button(bar2, text="按名称",
+                                      command=lambda: self.sort_search("name"))
+        self.fs_btn_name.pack(side="right", padx=(0, 8))
+        self.fs_btn_time = ttk.Button(bar2, text="按时间",
+                                      command=lambda: self.sort_search("time"))
+        self.fs_btn_time.pack(side="right", padx=(0, 8))
+        self.fs_btn_size = ttk.Button(bar2, text="按大小 ▼",
+                                      command=lambda: self.sort_search("size"))
+        self.fs_btn_size.pack(side="right", padx=(0, 8))
+
+        ttk.Label(card, textvariable=self.fs_summary_var, style="CardMuted.TLabel",
+                  wraplength=1100).pack(anchor="w", pady=(6, 0))
+
+        f_cols = ("sel", "kind", "name", "parent", "size", "mtime", "path")
+        self.fs_tree = ttk.Treeview(card, columns=f_cols, show="headings",
+                                    height=16, style="Plain.Treeview")
+        self.fs_tree.tag_configure("striped", background="#fafbfe")
+        for cid, title, width, anchor in (("sel", "选中", 48, "center"),
+                                          ("kind", "类型", 76, "center"),
+                                          ("name", "名称", 200, "w"),
+                                          ("parent", "所在目录", 300, "w"),
+                                          ("size", "大小", 96, "e"),
+                                          ("mtime", "修改时间", 140, "center"),
+                                          ("path", "完整路径", 480, "w")):
+            self.fs_tree.heading(cid, text=title)
+            self.fs_tree.column(cid, width=width, anchor=anchor,
+                                stretch=(cid in ("name", "path")))
+        self.fs_tree.heading("size", command=lambda: self.sort_search("size"))
+        self.fs_tree.heading("mtime", command=lambda: self.sort_search("time"))
+        self.fs_tree.heading("name", command=lambda: self.sort_search("name"))
+        f_vsb = ttk.Scrollbar(card, orient="vertical", command=self.fs_tree.yview)
+        f_hsb = ttk.Scrollbar(card, orient="horizontal", command=self.fs_tree.xview)
+        self.fs_tree.configure(yscrollcommand=f_vsb.set, xscrollcommand=f_hsb.set)
+        f_pane = tk.Frame(card, bg=CARD)
+        f_pane.pack(fill="both", expand=True, pady=(8, 0))
+        self.fs_tree.grid(in_=f_pane, row=0, column=0, sticky="nsew")
+        f_vsb.grid(in_=f_pane, row=0, column=1, sticky="ns")
+        f_hsb.grid(in_=f_pane, row=1, column=0, sticky="ew")
+        f_pane.grid_rowconfigure(0, weight=1)
+        f_pane.grid_columnconfigure(0, weight=1)
+        self.fs_tree.bind("<Double-1>", self.toggle_search_row)
+        self.update_search_sort_btn()
+
+        tip = ttk.Label(frame, style="Muted.TLabel", wraplength=1200, text=(
+            "多个关键字用空格分隔（全部命中才算匹配）；限定「起始目录」可大幅提速。"
+            "默认不实时统计文件夹体积，需要时勾选「统计文件夹占用」或对结果点「测算占用」。"
+            "系统目录与依赖目录会自动跳过，删除一律送入回收站。"))
+        tip.pack(anchor="w", pady=(8, 0))
+
     # ---------------- 数据 ----------------
 
     def refresh(self, force: bool = True, quick: bool = False) -> None:
@@ -1522,11 +2589,16 @@ class App:
 
         self._toggle_monitor_timer(self.tab == "monitor")
 
-        if self.tab in ("monitor", "cleanup"):
+        if self.tab in ("monitor", "cleanup", "search"):
             if self.tab == "monitor":
                 self._refresh_monitor()
+            elif self.tab == "search":
+                self.search_load_drives()
             elif not self.clean_targets:
                 self.scan_clean_targets()
+            if self.tab == "cleanup":
+                # 软件清理默认自动扫描本机全部软件（未扫过时）
+                self.root.after(400, self._auto_scan_soft)
             return
 
         self.filter_combo["values"] = [t for _, t in FILTERS[self.tab]]

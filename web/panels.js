@@ -7,7 +7,7 @@
 
 'use strict';
 
-const PANEL_TABS = { monitor: 1, cleanup: 1 };
+const PANEL_TABS = { monitor: 1, cleanup: 1, search: 1 };
 
 const mon = { data: null, timer: null };
 const clean = {
@@ -15,6 +15,16 @@ const clean = {
   files: [],
   busyTargets: false,
   busyFiles: false,
+  wx: { rows: [], sort: 'size', order: 'desc', kind: 'all',
+        busy: false, installed: false, loaded: false },
+  // 「软件清理」：把系统已安装软件 + AI 编程工具缓存合并成一张清单
+  sgroup: { items: [], rows: [], checked: {}, counts: {},
+            target: '', hint: '', busy: false, loaded: false,
+            sort: 'size', order: 'desc', filter: '', source: 'all',
+            fileSort: 'size', fileOrder: 'desc', scope: 'cache',
+            fileBusy: false },
+  // 顶层「文件搜索」：按名称查找文件与文件夹
+  fsearch: { rows: [], sort: 'size', order: 'desc', busy: false, loaded: false },
 };
 
 /* ---------------- 页签切换 ---------------- */
@@ -36,6 +46,8 @@ function switchTab(tabEl) {
   document.getElementById('mainTip').hidden = isPanel;
   document.getElementById('monitorPanel').hidden = key !== 'monitor';
   document.getElementById('cleanupPanel').hidden = key !== 'cleanup';
+  document.getElementById('searchPanel').hidden = key !== 'search';
+  if (key === 'search') loadSearchDrives();
 
   // 切页时收起列设置下拉，避免残留
   const colMenu = document.getElementById('colMenu');
@@ -381,6 +393,7 @@ function renderCleanTargets() {
     const [cls, txt] = riskTag(t.risk);
     name.appendChild(el('span', `tag-sm ${cls}`, txt));
     if (t.admin) name.appendChild(el('span', 'tag-sm t-risk-medium', '需管理员'));
+    if (t.group) name.appendChild(el('span', 'tag-sm', t.group));
     mid.appendChild(name);
     mid.appendChild(el('div', 'td', t.available ? t.desc : '该路径在本机不存在'));
     row.appendChild(mid);
@@ -550,6 +563,770 @@ async function doDeleteFiles() {
   );
 }
 
+/* ---------------- 微信缓存 / 聊天文件 ---------------- */
+
+async function scanWechat() {
+  const wx = clean.wx;
+  if (wx.busy) return;
+  wx.busy = true;
+  const box = document.getElementById('cWxFiles');
+  box.textContent = '';
+  box.appendChild(el('p', 'cell-sub', '正在扫描微信缓存与聊天文件…'));
+  try {
+    const sum = await api('/api/cleanup/wechat');
+    wx.installed = !!(sum.data && sum.data.installed);
+    renderWxSummary((sum.data && sum.data.groups) || []);
+
+    const json = await api(
+      `/api/cleanup/wechat-files?kind=${encodeURIComponent(wx.kind)}` +
+      `&sort=${encodeURIComponent(wx.sort)}&order=${encodeURIComponent(wx.order)}`);
+    wx.rows = (json.data && json.data.rows) || [];
+    wx.loaded = true;
+    renderWxFiles();
+  } catch (err) {
+    box.textContent = '';
+    box.appendChild(el('p', 'cell-sub', `扫描失败：${err.message}`));
+  } finally {
+    wx.busy = false;
+  }
+}
+
+function renderWxSummary(groups) {
+  const box = document.getElementById('cWxSummary');
+  box.textContent = '';
+  if (!clean.wx.installed) {
+    box.appendChild(el('p', 'cell-sub',
+      '未检测到微信数据目录（本机可能未安装微信，或聊天文件保存在其他位置）。'));
+    return;
+  }
+  if (!groups.length) {
+    box.appendChild(el('p', 'cell-sub', '未发现可清理的微信文件。'));
+    return;
+  }
+  const grid = el('div', 'wx-cat-grid');
+  groups.forEach(g => {
+    const card = el('div', 'wx-cat' + (clean.wx.kind === g.kind ? ' on' : ''));
+    card.appendChild(el('div', 'wc-name', g.name));
+    card.appendChild(el('div', 'wc-size', g.size_text));
+    card.appendChild(el('div', 'wc-meta', `${g.count} 个文件`));
+    if (g.desc) {
+      const d = el('div', 'wc-desc', g.desc);
+      d.title = g.desc;
+      card.appendChild(d);
+    }
+    card.onclick = () => {
+      clean.wx.kind = (clean.wx.kind === g.kind) ? 'all' : g.kind;
+      const sel = document.getElementById('cWxKind');
+      if (sel) sel.value = clean.wx.kind;
+      scanWechat();
+    };
+    grid.appendChild(card);
+  });
+  box.appendChild(grid);
+}
+
+function selectWxKind() {
+  const wx = clean.wx;
+  if (!wx.rows.length) { toast('当前分类没有可勾选的文件', 'err'); return; }
+  const turnOn = wx.rows.some(f => !f._checked);
+  wx.rows.forEach(f => { f._checked = turnOn; });
+  renderWxFiles();
+}
+
+/* ---------------- 软件清理（已安装软件 + AI 工具缓存，合并展示） ---------------- */
+
+async function scanSoftAll() {
+  const sg = clean.sgroup;
+  if (sg.busy) return;
+  sg.busy = true;
+  const sumEl = document.getElementById('cSoftAllSummary');
+  if (sumEl) sumEl.textContent = '正在扫描本机全部软件（已安装软件 + AI 工具缓存），请稍候…';
+  try {
+    const json = await api('/api/cleanup/software-list');
+    const d = json.data || {};
+    sg.items = d.items || [];
+    sg.counts = d.counts || {};
+    sg.checked = {};
+    sg.loaded = true;
+    if (sumEl) {
+      sumEl.textContent =
+        `${sg.items.length} 项软件（已安装 ${sg.counts.installed || 0} · ` +
+        `AI 工具缓存 ${sg.counts.agents || 0}` +
+        (sg.counts.discovered ? ` · 扫描发现 ${sg.counts.discovered}` : '') + '）' +
+        ` · 可清理合计 ${d.total_cache_text || '0 B'}` +
+        ` · 用时 ${d.elapsed || 0}s` +
+        (d.timed_out ? ' · 已触发时间上限，未测算项显示「—」' : '');
+    }
+    renderSoftAll();
+    if (sg.target) await loadSoftFiles(sg.target, true);
+  } catch (err) {
+    if (sumEl) sumEl.textContent = '扫描失败：' + err.message;
+  } finally {
+    sg.busy = false;
+  }
+}
+
+function softFilteredItems() {
+  const sg = clean.sgroup;
+  const kw = (sg.filter || '').trim().toLowerCase();
+  let items = (sg.items || []).slice();
+  if (sg.source && sg.source !== 'all') {
+    items = items.filter(i => i.source_key === sg.source);
+  }
+  if (kw) {
+    items = items.filter(i =>
+      String(i.name || '').toLowerCase().includes(kw) ||
+      String(i.publisher || '').toLowerCase().includes(kw) ||
+      String(i.location || '').toLowerCase().includes(kw));
+  }
+  const dir = sg.order === 'asc' ? 1 : -1;
+  if (sg.sort === 'name') {
+    items.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-Hans-CN') * dir);
+  } else {
+    const val = (i) => (i.cache_size > 0 ? i.cache_size : (i.size || 0));
+    items.sort((a, b) => (val(a) - val(b)) * dir);
+  }
+  return items;
+}
+
+function renderSoftAll() {
+  const sg = clean.sgroup;
+  const body = document.getElementById('cSoftAllBody');
+  if (!body) return;
+  body.textContent = '';
+  const items = softFilteredItems();
+  if (!items.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.className = 'cell-sub';
+    td.textContent = sg.loaded ? '没有匹配的软件。' : '点击「扫描全部软件」开始…';
+    tr.appendChild(td);
+    body.appendChild(tr);
+    updateSoftAllTotal();
+    return;
+  }
+  items.forEach(i => {
+    const tr = document.createElement('tr');
+    tr.className = 'soft-row' + (sg.target === i.key ? ' on' : '');
+
+    const tdChk = document.createElement('td');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!sg.checked[i.key];
+    cb.onchange = () => { sg.checked[i.key] = cb.checked; updateSoftAllTotal(); };
+    tdChk.appendChild(cb);
+    tr.appendChild(tdChk);
+
+    const tdName = document.createElement('td');
+    tdName.appendChild(el('div', 'fp', i.name));
+    tdName.title = i.name;
+    tr.appendChild(tdName);
+
+    const tdSrc = document.createElement('td');
+    tdSrc.appendChild(el('span', 'tag-sm ' +
+      (i.source_key === 'installed' ? 't-risk-low' : 't-risk-medium'), i.source));
+    tr.appendChild(tdSrc);
+
+    const tdPub = document.createElement('td');
+    tdPub.appendChild(el('div', 'fm', i.publisher || '—'));
+    tdPub.appendChild(el('div', 'fm', i.version && i.version !== '—'
+      ? ('版本 ' + i.version) : (i.cache_count ? (i.cache_count + ' 个缓存文件') : '')));
+    tr.appendChild(tdPub);
+
+    tr.appendChild(el('td', 'num', i.size > 0 ? i.size_text : '—'));
+    tr.appendChild(el('td', 'num', i.cache_size > 0 ? i.cache_text : '—'));
+
+    const tdLoc = document.createElement('td');
+    tdLoc.appendChild(el('div', 'fm', i.location || '（未提供安装位置）'));
+    tdLoc.title = i.location || '';
+    tr.appendChild(tdLoc);
+
+    tr.onclick = (ev) => {
+      if (ev.target && ev.target.tagName === 'INPUT') return;
+      selectSoftRow(i.key);
+    };
+    body.appendChild(tr);
+  });
+  updateSoftAllTotal();
+}
+
+function selectSoftRow(key) {
+  const sg = clean.sgroup;
+  sg.target = (sg.target === key) ? '' : key;
+  renderSoftAll();
+  const item = (sg.items || []).find(i => i.key === key);
+  const title = document.getElementById('cSoftFileTitle');
+  if (title) {
+    title.textContent = (sg.target && item)
+      ? ('可清理文件 · ' + item.name) : '可清理文件';
+  }
+  if (sg.target) {
+    loadSoftFiles(sg.target);
+  } else {
+    sg.rows = [];
+    renderSoftFiles();
+  }
+}
+
+async function loadSoftFiles(key, silent) {
+  const sg = clean.sgroup;
+  if (sg.fileBusy) return;
+  sg.fileBusy = true;
+  const box = document.getElementById('cSoftFiles');
+  if (box && !silent) {
+    box.textContent = '';
+    box.appendChild(el('p', 'cell-sub', '正在读取可清理文件…'));
+  }
+  try {
+    const json = await api('/api/cleanup/software-cache-files?key=' +
+      encodeURIComponent(key || '') +
+      '&scope=' + encodeURIComponent(sg.scope) +
+      '&sort=' + encodeURIComponent(sg.fileSort) +
+      '&order=' + encodeURIComponent(sg.fileOrder) + '&limit=400');
+    const d = json.data || {};
+    sg.rows = d.rows || [];
+    sg.hint = d.hint || '';
+    sg.fileLabel = d.label || '';
+    sg.fileDirText = d.dir_size_text || '0 B';
+    sg.fileDirCount = d.dir_count || 0;
+    renderSoftFiles();
+  } catch (err) {
+    sg.rows = [];
+    sg.hint = '读取失败：' + err.message;
+    renderSoftFiles();
+  } finally {
+    sg.fileBusy = false;
+  }
+}
+
+function renderSoftFiles() {
+  const sg = clean.sgroup;
+  const box = document.getElementById('cSoftFiles');
+  if (!box) return;
+  box.textContent = '';
+  if (!sg.target) {
+    box.appendChild(el('p', 'cell-sub', '点击上方软件列表中的一项，查看它的可清理文件。'));
+    updateSoftFileTotal();
+    return;
+  }
+  if (sg.hint) box.appendChild(el('p', 'cell-sub', sg.hint));
+  if (sg.rows.length) {
+    box.appendChild(el('p', 'cell-sub',
+      `${sg.fileLabel || ''} · 当前范围合计 ${sg.fileDirText} · ${sg.fileDirCount} 个文件`));
+  }
+  if (!sg.rows.length) {
+    box.appendChild(el('p', 'cell-sub', '没有可列出的文件。'));
+    updateSoftFileTotal();
+    return;
+  }
+  sg.rows.forEach(f => {
+    const row = el('div', 'file-row');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!f._checked;
+    cb.onchange = () => { f._checked = cb.checked; updateSoftFileTotal(); };
+    row.appendChild(cb);
+
+    const mid = document.createElement('div');
+    const p = el('div', 'fp', f.path);
+    p.title = f.path;
+    mid.appendChild(p);
+    mid.appendChild(el('div', 'fm', `修改于 ${f.mtime}（${f.age_days} 天前）`));
+    row.appendChild(mid);
+
+    row.appendChild(el('div', 'fs', f.size_text));
+    box.appendChild(row);
+  });
+  updateSoftFileTotal();
+}
+
+function softCheckedItems() {
+  const sg = clean.sgroup;
+  return (sg.items || []).filter(i => sg.checked[i.key]);
+}
+
+function updateSoftAllTotal() {
+  const picked = softCheckedItems();
+  const cache = picked.reduce((s, i) => s + (i.cache_size || 0), 0);
+  const canUn = picked.filter(i => i.can_uninstall).length;
+  document.getElementById('cSoftAllTotal').textContent =
+    `已选中 ${picked.length} 项软件 · 可清理 ${formatBytes(cache)} · 可卸载 ${canUn} 项`;
+}
+
+function updateSoftFileTotal() {
+  const sel = (clean.sgroup.rows || []).filter(f => f._checked);
+  const total = sel.reduce((s, f) => s + f.size, 0);
+  const elTotal = document.getElementById('cSoftFileTotal');
+  if (elTotal) elTotal.textContent = `已选中 ${sel.length} 个文件 · 合计 ${formatBytes(total)}`;
+}
+
+function selectAllSoftRows() {
+  const sg = clean.sgroup;
+  const items = softFilteredItems();
+  if (!items.length) { toast('当前列表没有可选的项', 'err'); return; }
+  const turnOn = items.some(i => !sg.checked[i.key]);
+  items.forEach(i => { sg.checked[i.key] = turnOn; });
+  renderSoftAll();
+}
+
+function toggleSoftFilesAll() {
+  const rows = clean.sgroup.rows || [];
+  if (!rows.length) { toast('当前没有可勾选的文件', 'err'); return; }
+  const turnOn = rows.some(f => !f._checked);
+  rows.forEach(f => { f._checked = turnOn; });
+  renderSoftFiles();
+}
+
+function setSoftAllSort(by) {
+  const sg = clean.sgroup;
+  if (sg.sort === by) {
+    sg.order = sg.order === 'desc' ? 'asc' : 'desc';
+  } else {
+    sg.sort = by;
+    sg.order = by === 'name' ? 'asc' : 'desc';
+  }
+  updateSoftAllSortButtons();
+  renderSoftAll();
+}
+
+function updateSoftAllSortButtons() {
+  const sg = clean.sgroup;
+  const bs = document.getElementById('btnSoftAllSortSize');
+  const bn = document.getElementById('btnSoftAllSortName');
+  if (bs) bs.textContent = '按大小' + (sg.sort === 'size' ? (sg.order === 'desc' ? ' ▼' : ' ▲') : '');
+  if (bn) bn.textContent = '按名称' + (sg.sort === 'name' ? (sg.order === 'desc' ? ' ▼' : ' ▲') : '');
+}
+
+function setSoftFileSort(by) {
+  const sg = clean.sgroup;
+  if (sg.fileSort === by) {
+    sg.fileOrder = sg.fileOrder === 'desc' ? 'asc' : 'desc';
+  } else {
+    sg.fileSort = by;
+    sg.fileOrder = 'desc';
+  }
+  updateSoftFileSortButtons();
+  if (sg.target) loadSoftFiles(sg.target);
+}
+
+function updateSoftFileSortButtons() {
+  const sg = clean.sgroup;
+  const bs = document.getElementById('btnSoftFileSortSize');
+  const bt = document.getElementById('btnSoftFileSortTime');
+  const arrow = (on, ascIsUp) => on ? (sg.fileOrder === 'desc' ? ' ▼' : ' ▲') : '';
+  if (bs) bs.textContent = '按大小' + arrow(sg.fileSort === 'size');
+  if (bt) bt.textContent = '按时间' + arrow(sg.fileSort === 'time');
+}
+
+async function doCleanSoftSelected() {
+  const picked = softCheckedItems();
+  if (!picked.length) { toast('请先勾选要清理的软件', 'err'); return; }
+  const total = picked.reduce((s, i) => s + (i.cache_size || 0), 0);
+  confirmAction(
+    `清理 ${picked.length} 项软件的缓存`,
+    `即将清理：${picked.slice(0, 8).map(i => '· ' + i.name +
+      (i.cache_size ? '（' + i.cache_text + '）' : '')).join('\n')}` +
+    (picked.length > 8 ? `\n…以及另外 ${picked.length - 8} 项` : '') +
+    `\n\n合计约 ${formatBytes(total)}。只会清理缓存 / 日志 / 会话历史等可再生数据，` +
+    '账号凭证、用户配置与程序本体不会被删除，文件送入回收站可还原。',
+    async () => {
+      for (const item of picked) {
+        if (!item.cache_size) continue;
+        try {
+          await api('/api/cleanup/delete-files', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: item.paths || [], recycle: true }),
+          });
+        } catch (err) {
+          toast(`清理 ${item.name} 失败：${err.message}`, 'err');
+        }
+      }
+      toast('选中软件的缓存已清理完成，可回收站还原', 'ok');
+      await scanSoftAll();
+    }
+  );
+}
+
+async function doUninstallSoft() {
+  const picked = softCheckedItems().filter(i => i.can_uninstall);
+  if (!picked.length) {
+    toast('请勾选支持卸载的已安装软件（软件名称右侧「来源」为已安装）', 'err');
+    return;
+  }
+  const skipped = softCheckedItems().filter(i => !i.can_uninstall);
+  confirmAction(
+    `卸载 ${picked.length} 个软件`,
+    `即将调用软件自带的卸载程序：\n` +
+    `${picked.map(i => '· ' + i.name + (i.version && i.version !== '—' ? ' ' + i.version : '')).join('\n')}` +
+    (skipped.length ? `\n\n另有 ${skipped.length} 项未提供卸载命令，已跳过。` : '') +
+    '\n\n卸载命令来自系统登记的卸载信息，实际进度请在弹出的卸载窗口中完成。',
+    async () => {
+      for (const item of picked) {
+        try {
+          const json = await api('/api/cleanup/uninstall', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ident: item.ident, quiet: false }),
+          });
+          toast(json.message || (json.ok ? '已启动卸载程序' : '卸载失败'), json.ok ? 'ok' : 'err');
+        } catch (err) {
+          toast(`卸载 ${item.name} 失败：${err.message}`, 'err');
+        }
+      }
+    }
+  );
+}
+
+async function doDeleteSoftFiles() {
+  const picked = (clean.sgroup.rows || []).filter(f => f._checked);
+  if (!picked.length) { toast('请先勾选要删除的文件', 'err'); return; }
+  const total = picked.reduce((s, f) => s + f.size, 0);
+  confirmAction(
+    `删除 ${picked.length} 个文件`,
+    `即将把以下 ${picked.length} 个文件（合计 ${formatBytes(total)}）送入回收站：\n` +
+    `${picked.slice(0, 8).map(f => '· ' + f.name + '（' + f.size_text + '）').join('\n')}` +
+    (picked.length > 8 ? `\n…以及另外 ${picked.length - 8} 个文件` : '') +
+    '\n\n这些都是缓存 / 日志类可再生数据，删除后软件会自动重建，可从回收站还原。',
+    async () => {
+      const json = await api('/api/cleanup/delete-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: picked.map(f => f.path), recycle: true }),
+      });
+      const d = json.data || {};
+      toast(`${json.message || d.message || '已提交删除'}` +
+        (d.skipped ? `，跳过 ${d.skipped} 个受保护文件` : ''), json.ok ? 'ok' : 'err');
+      clean.sgroup.rows.forEach(f => { f._checked = false; });
+      await loadSoftFiles(clean.sgroup.target);
+    }
+  );
+}
+
+function renderWxFiles() {
+  const wx = clean.wx;
+  const box = document.getElementById('cWxFiles');
+  box.textContent = '';
+  if (!wx.rows.length) {
+    box.appendChild(el('p', 'cell-sub',
+      wx.installed ? '没有符合条件的微信文件' : '未检测到微信数据目录'));
+    updateWxTotal();
+    return;
+  }
+  wx.rows.forEach(f => {
+    const row = el('div', 'file-row');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!f._checked;
+    cb.onchange = () => { f._checked = cb.checked; updateWxTotal(); };
+    row.appendChild(cb);
+
+    const mid = document.createElement('div');
+    const p = el('div', 'fp', f.path);
+    p.title = f.path;
+    mid.appendChild(p);
+    mid.appendChild(el('div', 'fm',
+      `${f.kind_text} · 修改于 ${f.mtime}（${f.age_days} 天前）`));
+    row.appendChild(mid);
+
+    row.appendChild(el('span', 'tag-sm t-risk-medium', f.kind_text));
+    row.appendChild(el('div', 'fs', f.size_text));
+    box.appendChild(row);
+  });
+  updateWxTotal();
+}
+
+function updateWxTotal() {
+  const sel = clean.wx.rows.filter(f => f._checked);
+  const total = sel.reduce((s, f) => s + f.size, 0);
+  document.getElementById('cWxTotal').textContent =
+    `已选中 ${sel.length} 个文件 · 合计 ${formatBytes(total)}`;
+}
+
+function setWxSort(by) {
+  const wx = clean.wx;
+  if (wx.sort === by) {
+    wx.order = wx.order === 'desc' ? 'asc' : 'desc';
+  } else {
+    wx.sort = by;
+    wx.order = 'desc';
+  }
+  updateWxSortButtons();
+  if (wx.loaded) scanWechat();
+}
+
+function updateWxSortButtons() {
+  const wx = clean.wx;
+  const bs = document.getElementById('btnWxSortSize');
+  const bt = document.getElementById('btnWxSortTime');
+  if (bs) bs.textContent = '按大小' + (wx.sort === 'size' ? (wx.order === 'desc' ? ' ▼' : ' ▲') : '');
+  if (bt) bt.textContent = '按时间' + (wx.sort === 'time' ? (wx.order === 'desc' ? ' ▼' : ' ▲') : '');
+}
+
+async function doDeleteWechat() {
+  const picked = clean.wx.rows.filter(f => f._checked);
+  if (!picked.length) { toast('请先勾选要删除的文件', 'err'); return; }
+  const total = picked.reduce((s, f) => s + f.size, 0);
+  confirmAction(
+    `删除 ${picked.length} 个微信文件`,
+    `即将把以下 ${picked.length} 个文件（合计 ${formatBytes(total)}）送入回收站：\n` +
+    `${picked.slice(0, 8).map(f => '· ' + f.name + '（' + f.size_text + '）').join('\n')}` +
+    (picked.length > 8 ? `\n…以及另外 ${picked.length - 8} 个文件` : '') +
+    '\n\n删除后聊天记录中的图片 / 视频将无法查看，可从回收站还原。',
+    async () => {
+      const json = await api('/api/cleanup/delete-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: picked.map(f => f.path), recycle: true }),
+      });
+      const d = json.data || {};
+      toast(`${json.message || d.message || '已提交删除'}` +
+        (d.skipped ? `，跳过 ${d.skipped} 个受保护文件` : ''), json.ok ? 'ok' : 'err');
+      clean.wx.rows.forEach(f => { f._checked = false; });
+      await scanWechat();
+    }
+  );
+}
+
+/* ---------------- 顶层「文件搜索」：查找文件与文件夹 ---------------- */
+
+async function loadSearchDrives() {
+  const sel = document.getElementById('fDrive');
+  if (!sel || sel.options.length > 1) return;
+  try {
+    const json = await api('/api/cleanup/drives');
+    const drives = (json.data || []);
+    sel.textContent = '';
+    const all = el('option', '', '全部分区');
+    all.value = '';
+    sel.appendChild(all);
+    drives.forEach(d => {
+      const o = el('option', '', `${d.mountpoint}（可用 ${d.free_text}）`);
+      o.value = d.mountpoint;
+      sel.appendChild(o);
+    });
+  } catch (err) {
+    if (sel) sel.textContent = '';
+  }
+}
+
+async function doSearchFiles() {
+  const fs = clean.fsearch;
+  if (fs.busy) return;
+  const kwEl = document.getElementById('fKey');
+  const kw = (kwEl.value || '').trim();
+  const sumEl = document.getElementById('fSummary');
+  const box = document.getElementById('fResults');
+  if (!kw) { toast('请输入要查找的名称关键字', 'err'); return; }
+  fs.busy = true;
+  fs.loaded = true;
+  if (box) {
+    box.textContent = '';
+    box.appendChild(el('p', 'cell-sub', '正在搜索，请稍候…'));
+  }
+  try {
+    const q = [
+      'q=' + encodeURIComponent(kw),
+      'drive=' + encodeURIComponent((document.getElementById('fDrive') || {}).value || ''),
+      'root=' + encodeURIComponent((document.getElementById('fRoot') || {}).value || ''),
+      'mode=' + encodeURIComponent((document.getElementById('fMode') || {}).value || 'all'),
+      'ext=' + encodeURIComponent((document.getElementById('fExt') || {}).value || ''),
+      'min_mb=' + encodeURIComponent((document.getElementById('fMinMb') || {}).value || '0'),
+      'depth=' + encodeURIComponent((document.getElementById('fDepth') || {}).value || '7'),
+      'max_seconds=' + encodeURIComponent((document.getElementById('fSecs') || {}).value || '20'),
+      'dir_size=' + (((document.getElementById('fDirSize') || {}).checked) ? '1' : '0'),
+      'sort=' + encodeURIComponent(fs.sort),
+      'order=' + encodeURIComponent(fs.order),
+      'limit=500',
+    ].join('&');
+    const json = await api('/api/search/files?' + q);
+    const d = json.data || {};
+    fs.rows = d.rows || [];
+    fs.foundText = d.total_found || 0;
+    fs.measuredText = d.measured_text || '0 B';
+    fs.hint = d.hint || '';
+    fs.scannedDirs = d.scanned_dirs || 0;
+    fs.scannedFiles = d.scanned_files || 0;
+    fs.elapsed = d.elapsed || 0;
+    renderSearchResults();
+    if (sumEl) {
+      sumEl.textContent =
+        `关键字「${d.keyword || kw}」：找到 ${d.total_found || 0} 项` +
+        `（已显示 ${d.shown || 0} 项） · 合计 ${d.measured_text || '0 B'}` +
+        ` · 遍历 ${d.scanned_dirs || 0} 个目录 / ${d.scanned_files || 0} 个文件` +
+        ` · 用时 ${d.elapsed || 0}s` +
+        (d.timed_out ? ' · 已触发时间上限' : '');
+    }
+  } catch (err) {
+    fs.rows = [];
+    fs.hint = '搜索失败：' + err.message;
+    renderSearchResults();
+    if (sumEl) sumEl.textContent = '搜索失败：' + err.message;
+  } finally {
+    fs.busy = false;
+  }
+}
+
+function renderSearchResults() {
+  const fs = clean.fsearch;
+  const box = document.getElementById('fResults');
+  if (!box) return;
+  box.textContent = '';
+  if (fs.hint) box.appendChild(el('p', 'cell-sub', fs.hint));
+  if (!fs.rows.length) {
+    box.appendChild(el('p', 'cell-sub', '没有匹配的结果。'));
+    updateSearchTotal();
+    return;
+  }
+  fs.rows.forEach(r => {
+    const row = el('div', 'file-row');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!r._checked;
+    cb.onchange = () => { r._checked = cb.checked; updateSearchTotal(); };
+    row.appendChild(cb);
+
+    row.appendChild(el('span', 'tag-sm ' + (r.is_dir ? 't-risk-low' : 't-risk-medium'),
+      r.is_dir ? '文件夹' : '文件'));
+
+    const mid = document.createElement('div');
+    const name = el('div', 'fp', r.name);
+    name.title = r.path;
+    mid.appendChild(name);
+    mid.appendChild(el('div', 'fm', r.parent + ' · 修改于 ' + r.mtime +
+      '（' + r.age_days + ' 天前）'));
+    mid.onclick = () => revealSearchRow(r.path);
+    mid.style.cursor = 'pointer';
+    row.appendChild(mid);
+
+    row.appendChild(el('div', 'fs', r.size_text));
+    box.appendChild(row);
+  });
+  updateSearchTotal();
+}
+
+function searchCheckedRows() {
+  return (clean.fsearch.rows || []).filter(r => r._checked);
+}
+
+function updateSearchTotal() {
+  const sel = searchCheckedRows();
+  const dirs = sel.filter(r => r.is_dir).length;
+  const total = sel.reduce((s, r) => s + (r.size > 0 ? r.size : 0), 0);
+  const elTotal = document.getElementById('fTotal');
+  if (elTotal) {
+    elTotal.textContent =
+      `已选中 ${sel.length} 项（文件夹 ${dirs} · 文件 ${sel.length - dirs}） · ` +
+      `合计 ${formatBytes(total)}`;
+  }
+}
+
+function toggleSearchAll() {
+  const rows = clean.fsearch.rows || [];
+  if (!rows.length) { toast('当前没有可勾选的结果', 'err'); return; }
+  const turnOn = rows.some(r => !r._checked);
+  rows.forEach(r => { r._checked = turnOn; });
+  renderSearchResults();
+}
+
+function setSearchSort(by) {
+  const fs = clean.fsearch;
+  if (fs.sort === by) {
+    fs.order = fs.order === 'desc' ? 'asc' : 'desc';
+  } else {
+    fs.sort = by;
+    fs.order = by === 'name' ? 'asc' : 'desc';
+  }
+  updateSearchSortButtons();
+  const kwEl = document.getElementById('fKey');
+  if (kwEl && (kwEl.value || '').trim()) doSearchFiles();
+}
+
+function updateSearchSortButtons() {
+  const fs = clean.fsearch;
+  const arr = (on) => on ? (fs.order === 'desc' ? ' ▼' : ' ▲') : '';
+  const bs = document.getElementById('btnFSortSize');
+  const bt = document.getElementById('btnFSortTime');
+  const bn = document.getElementById('btnFSortName');
+  if (bs) bs.textContent = '按大小' + arr(fs.sort === 'size');
+  if (bt) bt.textContent = '按时间' + arr(fs.sort === 'time');
+  if (bn) bn.textContent = '按名称' + arr(fs.sort === 'name');
+}
+
+async function measureSearchSelected() {
+  const picked = searchCheckedRows();
+  if (!picked.length) { toast('请先勾选要测算的结果行', 'err'); return; }
+  const withSize = picked.filter(r => !(r.is_dir && r.size < 0));
+  let targets = withSize.length ? withSize : picked;
+  targets = targets.slice(0, 40);
+  try {
+    const json = await api('/api/search/measure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: targets.map(r => r.path), max_seconds: 25 }),
+    });
+    const map = {};
+    ((json.data || {}).items || []).forEach(i => { map[i.path] = i; });
+    clean.fsearch.rows.forEach(r => {
+      const d = map[r.path];
+      if (d && d.size >= 0) {
+        r.size = d.size;
+        r.size_text = d.size_text;
+      }
+    });
+    renderSearchResults();
+    toast(`已测算 ${targets.length} 项占用`, 'ok');
+  } catch (err) {
+    toast('测算失败：' + err.message, 'err');
+  }
+}
+
+async function revealSearchRow(path) {
+  if (!path) {
+    const picked = searchCheckedRows();
+    if (!picked.length) { toast('请先勾选一行', 'err'); return; }
+    path = picked[0].path;
+  }
+  try {
+    const json = await api('/api/search/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: path }),
+    });
+    toast(json.message || (json.ok ? '已打开' : '打开失败'), json.ok ? 'ok' : 'err');
+  } catch (err) {
+    toast('打开失败：' + err.message, 'err');
+  }
+}
+
+async function deleteSearchSelected() {
+  const picked = searchCheckedRows();
+  if (!picked.length) { toast('请先勾选要删除的结果行', 'err'); return; }
+  const total = picked.reduce((s, r) => s + (r.size > 0 ? r.size : 0), 0);
+  confirmAction(
+    `删除 ${picked.length} 项`,
+    `即将把以下 ${picked.length} 项送入回收站：\n` +
+    `${picked.slice(0, 8).map(r => '· ' + r.name +
+      (r.size > 0 ? '（' + r.size_text + '）' : '（文件夹）')).join('\n')}` +
+    (picked.length > 8 ? `\n…以及另外 ${picked.length - 8} 项` : '') +
+    (total > 0 ? `\n\n合计 ${formatBytes(total)}。` : '\n\n文件夹体积未测算，实际释放空间以回收站为准。') +
+    '\n\n删除的文件送入回收站，可随时还原；位于系统保护目录的文件会被自动跳过。',
+    async () => {
+      const json = await api('/api/cleanup/delete-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: picked.map(r => r.path), recycle: true }),
+      });
+      const d = json.data || {};
+      toast(`${json.message || d.message || '已提交删除'}` +
+        (d.skipped ? `，跳过 ${d.skipped} 个受保护文件` : ''), json.ok ? 'ok' : 'err');
+      clean.fsearch.rows.forEach(r => { r._checked = false; });
+      await doSearchFiles();
+    }
+  );
+}
+
 /* ---------------- 面板事件绑定 ---------------- */
 
 function bindPanels() {
@@ -567,6 +1344,83 @@ function bindPanels() {
     );
   };
   document.getElementById('btnSelectNone').onclick = () => setTargetChecked([], false);
+
+  // --- 微信清理 ---
+  document.getElementById('btnScanWechat').onclick = scanWechat;
+  document.getElementById('btnCleanWechat').onclick = doDeleteWechat;
+  document.getElementById('btnWxSortSize').onclick = () => setWxSort('size');
+  document.getElementById('btnWxSortTime').onclick = () => setWxSort('time');
+  const cWxKind = document.getElementById('cWxKind');
+  if (cWxKind) {
+    cWxKind.onchange = () => {
+      clean.wx.kind = cWxKind.value;
+      if (clean.wx.loaded) scanWechat();
+    };
+  }
+  const btnWxSelKind = document.getElementById('btnWxSelectKind');
+  if (btnWxSelKind) btnWxSelKind.onclick = selectWxKind;
+
+  // --- 软件清理（已安装软件 + AI 工具缓存，合并展示） ---
+  document.getElementById('btnScanSoftAll').onclick = scanSoftAll;
+  document.getElementById('btnCleanSoftSelected').onclick = doCleanSoftSelected;
+  document.getElementById('btnUninstallSoft').onclick = doUninstallSoft;
+  document.getElementById('btnSelectAllSoft').onclick = selectAllSoftRows;
+  document.getElementById('btnSoftAllSortSize').onclick = () => setSoftAllSort('size');
+  document.getElementById('btnSoftAllSortName').onclick = () => setSoftAllSort('name');
+  const cSoftFilter = document.getElementById('cSoftFilter');
+  if (cSoftFilter) {
+    let filterTimer = null;
+    cSoftFilter.oninput = () => {
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(() => {
+        clean.sgroup.filter = cSoftFilter.value || '';
+        renderSoftAll();
+      }, 200);
+    };
+  }
+  const cSoftSource = document.getElementById('cSoftSource');
+  if (cSoftSource) {
+    cSoftSource.onchange = () => {
+      clean.sgroup.source = cSoftSource.value || 'all';
+      renderSoftAll();
+    };
+  }
+  document.getElementById('btnSoftFileSortSize').onclick = () => setSoftFileSort('size');
+  document.getElementById('btnSoftFileSortTime').onclick = () => setSoftFileSort('time');
+  document.getElementById('btnSoftFileSelectAll').onclick = toggleSoftFilesAll;
+  document.getElementById('btnSoftFileDelete').onclick = doDeleteSoftFiles;
+  const cSoftFileScope = document.getElementById('cSoftFileScope');
+  if (cSoftFileScope) {
+    cSoftFileScope.onchange = () => {
+      clean.sgroup.scope = cSoftFileScope.value || 'cache';
+      if (clean.sgroup.target) loadSoftFiles(clean.sgroup.target);
+    };
+  }
+
+  // --- 顶层文件搜索 ---
+  document.getElementById('btnSearchFiles').onclick = doSearchFiles;
+  document.getElementById('btnFSelectAll').onclick = toggleSearchAll;
+  document.getElementById('btnFMeasure').onclick = measureSearchSelected;
+  document.getElementById('btnFReveal').onclick = () => revealSearchRow('');
+  document.getElementById('btnFDelete').onclick = deleteSearchSelected;
+  document.getElementById('btnFSortSize').onclick = () => setSearchSort('size');
+  document.getElementById('btnFSortTime').onclick = () => setSearchSort('time');
+  document.getElementById('btnFSortName').onclick = () => setSearchSort('name');
+  const fKey = document.getElementById('fKey');
+  if (fKey) fKey.onkeydown = (e) => { if (e.key === 'Enter') doSearchFiles(); };
+  updateSearchSortButtons();
+
+  // 首次切到微信页 / 软件清理页时自动扫描一次
+  const clnTreeEl = document.getElementById('clnTree');
+  if (clnTreeEl) {
+    clnTreeEl.addEventListener('click', (e) => {
+      const item = e.target.closest('.tree-item');
+      if (!item) return;
+      if (item.dataset.page === 'clnWechat' && !clean.wx.loaded) scanWechat();
+      // 软件清理：默认打开就扫描本机全部软件（已安装软件 + AI 工具缓存）
+      if (item.dataset.page === 'clnAgent' && !clean.sgroup.loaded) scanSoftAll();
+    });
+  }
 
   bindTreeNav('monTree');
   bindTreeNav('clnTree');
