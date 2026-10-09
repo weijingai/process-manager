@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
+import socket
 import sys
 import threading
 import time
@@ -30,6 +32,7 @@ else:
 sys.path.insert(0, BASE_DIR)
 
 from core import APP_RELEASE_DATE, app_version, cleanup, control, monitor  # noqa: E402
+from core import resources as R  # noqa: E402
 from core import scanner, software, textutil  # noqa: E402
 
 MAX_ROWS = 1000
@@ -127,10 +130,11 @@ TAB_TITLES = {
     "monitor": "系统监控",
     "cleanup": "磁盘清理",
     "search": "文件查找",
+    "resource": "资源占用",
 }
 
 #: 页签在 Notebook 中的顺序，_on_tab_changed 靠索引反查页签名
-TAB_ORDER = ("running", "services", "processes", "ports", "monitor", "cleanup", "search")
+TAB_ORDER = ("running", "services", "processes", "ports", "monitor", "cleanup", "search", "resource")
 
 #: 内存/监控面板自动刷新的 ms 间隔
 MONITOR_INTERVAL_MS = 2000
@@ -412,7 +416,7 @@ class App:
         brand.pack(side="left", padx=13)
         tk.Label(brand, text="Windows进程管理工具（潍鲸 - weijing.co）", bg=CARD, fg=TEXT_STRONG,
                  font=(FONT, 14, "bold")).pack(anchor="w")
-        tk.Label(brand, text=f"服务 · 进程 · 端口 · 系统监控 · 磁盘清理 · 文件查找        "
+        tk.Label(brand, text=f"服务 · 进程 · 端口 · 系统监控 · 磁盘清理 · 文件查找 · 资源占用        "
                              f"版本 v{app_version()}（{APP_RELEASE_DATE}）",
                  bg=CARD, fg=MUTED, font=(FONT, 9)).pack(anchor="w")
 
@@ -458,6 +462,7 @@ class App:
             "monitor": self._build_monitor_tab,
             "cleanup": self._build_cleanup_tab,
             "search": self._build_search_tab,
+            "resource": self._build_resource_tab,
         }
         for key in TAB_ORDER:
             frame = ttk.Frame(self.notebook, padding=(8, 6))
@@ -482,6 +487,24 @@ class App:
         self.progress.pack(side="right")
 
         self._paint_tabs()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self) -> None:
+        """退出前先停止资源占用，避免遗留占用进程。"""
+        try:
+            if getattr(self, "occupier", None) is not None:
+                self.occupier.stop()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "limiter", None) is not None:
+                self.limiter.release()
+        except Exception:
+            pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
 
     # ---------------- 卡片式页签 ----------------
 
@@ -2532,6 +2555,206 @@ class App:
             "系统目录与依赖目录会自动跳过，删除一律送入回收站。"))
         tip.pack(anchor="w", pady=(8, 0))
 
+    # ---------------- 资源占用 ----------------
+
+    def _build_resource_tab(self, frame: ttk.Frame) -> None:
+        self.occupier = R.ResourceOccupier()
+        self.limiter = R.ProcessLimiter()
+
+        self.res_unit = {"cpu": "%", "mem": "MB", "disk": "MB/s", "net": "KB/s"}
+        self.res_label = {"cpu": "CPU", "mem": "内存", "disk": "磁盘", "net": "网络"}
+        self.res_default = {"cpu": 30.0, "mem": 200.0, "disk": 5.0, "net": 50.0}
+        self.res_desc = {
+            "cpu": "占用百分比（多核按核心数并发空转）",
+            "mem": "占用内存大小",
+            "disk": "磁盘写入速率",
+            "net": "本地回环网络吞吐",
+        }
+        self.res_enable: dict[str, tk.BooleanVar] = {}
+        self.res_value: dict[str, ttk.Entry] = {}
+        self.res_value_var: dict[str, tk.StringVar] = {}
+        self.res_actual_var: dict[str, tk.StringVar] = {}
+
+        # ===== 主动占用（负载生成） =====
+        occ = ttk.LabelFrame(frame, text="主动占用资源（负载生成 · 压测 / 防休眠 / 观察负载表现）",
+                             padding=(14, 12))
+        occ.pack(fill="x", pady=(0, 12))
+        ttk.Label(occ, text="勾选资源并填写目标值，点击「开始占用」即按设定比例 / 数量主动吃掉对应资源；可随时停止。",
+                  style="CardMuted.TLabel").pack(anchor="w", pady=(0, 8))
+
+        for key in ("cpu", "mem", "disk", "net"):
+            row = tk.Frame(occ, bg=CARD)
+            row.pack(fill="x", pady=3)
+            en = tk.BooleanVar(value=False)
+            self.res_enable[key] = en
+            ttk.Checkbutton(row, variable=en, style="Card.TCheckbutton",
+                            command=lambda k=key: self._res_toggle(k)).pack(side="left")
+            ttk.Label(row, text=self.res_label[key], style="CardHead.TLabel").pack(
+                side="left", padx=(8, 10))
+            vv = tk.StringVar(value=str(self.res_default[key]))
+            self.res_value_var[key] = vv
+            ent = ttk.Entry(row, width=10, textvariable=vv, state="disabled")
+            self.res_value[key] = ent
+            ent.pack(side="left")
+            ttk.Label(row, text=self.res_unit[key], style="CardMuted.TLabel").pack(
+                side="left", padx=(4, 0))
+            ttk.Label(row, text=self.res_desc[key], style="CardMuted.TLabel").pack(
+                side="left", padx=(12, 0))
+            act = tk.StringVar(value="实际：0" + self.res_unit[key])
+            self.res_actual_var[key] = act
+            ttk.Label(row, textvariable=act, style="Card.TLabel").pack(side="right")
+
+        btnrow = tk.Frame(occ, bg=CARD)
+        btnrow.pack(fill="x", pady=(10, 2))
+        self.res_start_btn = ttk.Button(btnrow, text="开始占用", style="Primary.TButton",
+                                        command=self._res_start)
+        self.res_start_btn.pack(side="left", padx=(0, 10))
+        self.res_stop_btn = ttk.Button(btnrow, text="停止占用", style="Ghost.TButton",
+                                       command=self._res_stop)
+        self.res_stop_btn.pack(side="left")
+        self.res_status_var = tk.StringVar(value="空闲")
+        ttk.Label(btnrow, textvariable=self.res_status_var, style="CardMuted.TLabel").pack(
+            side="left", padx=(14, 0))
+
+        # ===== 限制其它进程 =====
+        lim = ttk.LabelFrame(frame, text="限制其它进程资源占用（Windows Job Object）",
+                             padding=(14, 12))
+        lim.pack(fill="x")
+        lb = tk.Frame(lim, bg=CARD)
+        lb.pack(fill="x")
+        ttk.Label(lb, text="进程：", style="CardMuted.TLabel").pack(side="left")
+        self.lim_proc_var = tk.StringVar(value="")
+        self.lim_proc_combo = ttk.Combobox(lb, state="readonly", width=34,
+                                           textvariable=self.lim_proc_var)
+        self.lim_proc_combo.pack(side="left")
+        ttk.Button(lb, text="刷新列表", command=self._lim_refresh).pack(
+            side="left", padx=(8, 0))
+        ttk.Label(lb, text="CPU 上限 %：", style="CardMuted.TLabel").pack(
+            side="left", padx=(18, 0))
+        self.lim_cpu_var = tk.StringVar(value="20")
+        ttk.Entry(lb, width=8, textvariable=self.lim_cpu_var).pack(side="left")
+        ttk.Label(lb, text="内存上限 MB：", style="CardMuted.TLabel").pack(
+            side="left", padx=(14, 0))
+        self.lim_mem_var = tk.StringVar(value="256")
+        ttk.Entry(lb, width=10, textvariable=self.lim_mem_var).pack(side="left")
+
+        lb2 = tk.Frame(lim, bg=CARD)
+        lb2.pack(fill="x", pady=(10, 0))
+        self.lim_apply_btn = ttk.Button(lb2, text="应用限制", style="Primary.TButton",
+                                        command=self._lim_apply)
+        self.lim_apply_btn.pack(side="left", padx=(0, 10))
+        self.lim_release_btn = ttk.Button(lb2, text="解除限制", style="Ghost.TButton",
+                                          command=self._lim_release)
+        self.lim_release_btn.pack(side="left")
+        self.lim_status_var = tk.StringVar(value="")
+        ttk.Label(lb2, textvariable=self.lim_status_var, style="CardMuted.TLabel").pack(
+            side="left", padx=(14, 0))
+
+        if not self.limiter.supported():
+            self.lim_status_var.set("当前系统不支持进程限制（仅 Windows）")
+            self.lim_apply_btn.state(["disabled"])
+            self.lim_release_btn.state(["disabled"])
+            self.lim_proc_combo.configure(state="disabled")
+
+        self._res_poll()
+
+    def _res_toggle(self, key: str) -> None:
+        state = "normal" if self.res_enable[key].get() else "disabled"
+        self.res_value[key].configure(state=state)
+
+    def _res_start(self) -> None:
+        occ = self.occupier
+        try:
+            if occ.is_running():
+                occ.stop()
+        except Exception:
+            pass
+        cfg: dict = {}
+        for key in ("cpu", "mem", "disk", "net"):
+            cfg[f"enable_{key}"] = self.res_enable[key].get()
+            if cfg[f"enable_{key}"]:
+                try:
+                    val = float(self.res_value_var[key].get())
+                except ValueError:
+                    val = self.res_default[key]
+                cfg[key] = max(0.0, val)
+        occ.configure(**cfg)
+        try:
+            occ.start()
+            self.res_status_var.set("占用中…")
+        except Exception as exc:  # noqa: BLE001
+            self.res_status_var.set(f"启动失败：{exc}")
+
+    def _res_stop(self) -> None:
+        try:
+            self.occupier.stop()
+        except Exception:
+            pass
+        self.res_status_var.set("已停止")
+        for key in ("cpu", "mem", "disk", "net"):
+            self.res_actual_var[key].set("实际：0" + self.res_unit[key])
+
+    def _res_poll(self) -> None:
+        try:
+            if getattr(self, "occupier", None) and self.occupier.is_running():
+                st = self.occupier.status()
+                for key in ("cpu", "mem", "disk", "net"):
+                    s = st[key]
+                    txt = ("实际：未启用" if not s["enabled"]
+                           else f"实际：{s['actual']}{self.res_unit[key]}")
+                    self.res_actual_var[key].set(txt)
+                self.res_status_var.set("占用中…")
+            elif getattr(self, "occupier", None):
+                self.res_status_var.set("空闲")
+                for key in ("cpu", "mem", "disk", "net"):
+                    self.res_actual_var[key].set("实际：0" + self.res_unit[key])
+        except Exception:
+            pass
+        self._res_after = self.root.after(600, self._res_poll)
+
+    def _lim_refresh(self) -> None:
+        try:
+            items = R.list_processes()
+        except Exception as exc:  # noqa: BLE001
+            self.lim_status_var.set(f"读取进程失败：{exc}")
+            return
+        self.lim_proc_combo["values"] = items
+        if items and not self.lim_proc_var.get():
+            self.lim_proc_combo.current(0)
+        self.lim_status_var.set(f"共 {len(items)} 个进程")
+
+    def _lim_apply(self) -> None:
+        if not self.limiter.supported():
+            self.lim_status_var.set("当前系统不支持进程限制")
+            return
+        sel = self.lim_proc_var.get()
+        if not sel:
+            self.lim_status_var.set("请先选择进程")
+            return
+        try:
+            pid = int(sel.rsplit("(", 1)[-1].rstrip(")"))
+        except Exception:
+            self.lim_status_var.set("无法解析进程 PID")
+            return
+        cpu = None
+        mem = None
+        try:
+            if self.lim_cpu_var.get().strip():
+                cpu = float(self.lim_cpu_var.get())
+        except ValueError:
+            pass
+        try:
+            if self.lim_mem_var.get().strip():
+                mem = float(self.lim_mem_var.get())
+        except ValueError:
+            pass
+        res = self.limiter.apply(pid, cpu_percent=cpu, mem_mb=mem)
+        self.lim_status_var.set(res["message"])
+
+    def _lim_release(self) -> None:
+        res = self.limiter.release()
+        self.lim_status_var.set(res["message"])
+
     # ---------------- 数据 ----------------
 
     def refresh(self, force: bool = True, quick: bool = False) -> None:
@@ -2598,7 +2821,7 @@ class App:
 
         self._toggle_monitor_timer(self.tab == "monitor")
 
-        if self.tab in ("monitor", "cleanup", "search"):
+        if self.tab in ("monitor", "cleanup", "search", "resource"):
             if self.tab == "monitor":
                 self._refresh_monitor()
             elif self.tab == "search":
@@ -2935,6 +3158,86 @@ def run_smoke_test() -> int:
     return code
 
 
+# --------------------------------------------------------------------------- #
+# 单实例：避免重复启动打开多个窗口；再次启动时把已有窗口提到前台
+# --------------------------------------------------------------------------- #
+
+_SINGLE_INSTANCE_PORT = 8766
+_SINGLE_INSTANCE_MUTEX = "WinProcManagerDesktopSI"
+_si_mutex = None  # 保持句柄引用，避免被 GC 关闭
+
+
+def _si_signal_existing() -> bool:
+    """向已在运行的实例发送 SHOW 信号；成功返回 True。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2.0)
+        s.connect(("127.0.0.1", _SINGLE_INSTANCE_PORT))
+        try:
+            s.sendall(b"SHOW\n")
+        finally:
+            s.close()
+        return True
+    except OSError:
+        return False
+
+
+def _si_raise_window(root):
+    try:
+        root.deiconify()
+        root.lift()
+        root.attributes("-topmost", True)
+        root.after(250, lambda: root.attributes("-topmost", False))
+        root.focus_force()
+    except Exception:
+        pass
+
+
+def _si_start_listener(holder):
+    """主实例监听本地端口，收到 SHOW 时把窗口提到前台。"""
+    def _serve():
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            srv.bind(("127.0.0.1", _SINGLE_INSTANCE_PORT))
+        except OSError:
+            return  # 端口已被占用 -> 有其它实例在监听
+        srv.listen(8)
+        srv.settimeout(1.0)
+        while holder.get("alive", True):
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            try:
+                data = conn.recv(64)
+                if b"SHOW" in data and holder.get("root") is not None:
+                    holder["root"].after(0, _si_raise_window, holder["root"])
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+    threading.Thread(target=_serve, daemon=True).start()
+
+
+def _is_primary_instance() -> bool:
+    """True=本进程作为主实例继续；False=已有实例在运行（已通知其前台化）。"""
+    global _si_mutex
+    try:
+        kernel32 = ctypes.windll.kernel32
+        _si_mutex = kernel32.CreateMutexW(None, 0, _SINGLE_INSTANCE_MUTEX)
+        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            return not _si_signal_existing()
+    except Exception:
+        # 兜底：端口探测
+        return not _si_signal_existing()
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Windows进程管理工具（潍鲸 - weijing.co）（桌面版）")
     parser.add_argument("--smoke-test", action="store_true", help="无窗口自检后退出")
@@ -2944,9 +3247,16 @@ def main() -> int:
     if args.smoke_test:
         return run_smoke_test()
 
+    # 单实例：已有窗口则提到前台并退出，避免重复打开
+    if not _is_primary_instance():
+        return 0
+
     root = tk.Tk()
+    holder = {"root": root, "alive": True}
+    _si_start_listener(holder)
     App(root)
     root.mainloop()
+    holder["alive"] = False
     return 0
 
 

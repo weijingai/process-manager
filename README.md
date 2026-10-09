@@ -10,7 +10,7 @@
 
 ## 版本一览
 
-**当前版本：v1.2.0（2026-10-08）** · 完整更新记录见 [CHANGELOG.md](CHANGELOG.md)
+**当前版本：v1.3.0（2026-10-10）** · 完整更新记录见 [CHANGELOG.md](CHANGELOG.md)
 
 | 版本 | 形态 | 交付物 | 说明 |
 |---|---|---|---|
@@ -23,7 +23,7 @@
 
 版本号统一由 `VERSION` 文件 + `core/__init__.py`（Windows）/ `linux/core/__init__.py`（Linux）
 的 `APP_VERSION` 常量维护，界面右上角可实时查看；每次发布都会打 Git tag（如 `v1.1.0`），
-需要回滚时 `git checkout v1.2.0` 即可。
+需要回滚时 `git checkout v1.3.0` 即可。
 
 ---
 
@@ -53,7 +53,7 @@
 
 ## 下载与安装
 
-从 GitHub Releases 下载对应版本（当前版本 **v1.2.0**，历史版本可在 Releases 页按 tag 取用）：
+从 GitHub Releases 下载对应版本（当前版本 **v1.3.0**，历史版本可在 Releases 页按 tag 取用）：
 
 - **Windows（Web 版）**：`WindowsProcessManager.exe`
 - **Windows（桌面版）**：`WindowsProcessManager-Desktop.exe`
